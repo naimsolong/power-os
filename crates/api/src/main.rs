@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Power OS Contributors
 
-use axum::{routing::get, Router};
 use std::net::SocketAddr;
 use tracing::info;
 
