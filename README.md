@@ -67,12 +67,39 @@ npm run dev
 
 The frontend dev server usually runs on http://localhost:5173.
 
+## Local development (quickest)
+
+To run both backend and frontend together locally:
+
+```bash
+make dev
+```
+
+This command will:
+1. Start PostgreSQL in Docker
+2. Run migrations
+3. Start the Rust backend in the background
+4. Start the Vite frontend dev server in the foreground
+
+Press `Ctrl-C` to stop the frontend, backend, and database.
+
+You can also run them separately:
+
+| Command | Description |
+|---------|-------------|
+| `make be-dev` | Start database + migrations + backend |
+| `make frontend-dev` | Start frontend dev server only |
+| `make be-check` | Type-check the backend |
+| `make dev-stop` | Stop background backend and database |
+
 ## Useful commands
 
 | Command | Description |
 |---------|-------------|
-| `make dev-up` | Build and start all services |
-| `make dev-down` | Stop all services |
+| `make dev` | Start local backend + frontend |
+| `make dev-up` | Build and start all Docker services |
+| `make dev-down` | Stop all Docker services |
+| `make dev-stop` | Stop local backend/database |
 | `make migrate` | Run database migrations |
 | `make build` | Build the app image only |
 | `make logs` | Tail backend logs |
