@@ -20,7 +20,9 @@ set -a
 source .env
 set +a
 
-export DATABASE_URL="${DATABASE_URL:-postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-poweros}}"
+# .env points to the Docker service name `db`, which only resolves inside containers.
+# For local dev on the host, force localhost.
+export DATABASE_URL="postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@localhost:5432/${POSTGRES_DB:-poweros}"
 
 cleanup() {
   echo ""

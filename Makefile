@@ -37,8 +37,8 @@ frontend-dev:
 be-dev:
 	. "$HOME/.cargo/env" && \
 	docker compose up db -d --wait && \
-	sqlx migrate run --source crates/migrations/migrations && \
-	cargo run -p power-os-api
+	sqlx migrate run --source crates/migrations/migrations --database-url "postgres://postgres:postgres@localhost:5432/poweros" && \
+	DATABASE_URL="postgres://postgres:postgres@localhost:5432/poweros" cargo run -p power-os-api
 
 # Type-check backend
 be-check:
