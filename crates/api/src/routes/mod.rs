@@ -10,6 +10,8 @@ mod deal_stages;
 mod deals;
 mod error;
 mod health;
+mod invoices;
+mod journal_entries;
 mod parties;
 
 pub fn router(state: AppState) -> Router {
@@ -19,5 +21,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/parties", parties::router())
         .nest("/api/deal-stages", deal_stages::router())
         .nest("/api/deals", deals::router())
+        .nest("/api/invoices", invoices::router())
+        .nest("/api/journal-entries", journal_entries::router())
         .with_state(state)
 }
