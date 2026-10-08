@@ -76,7 +76,10 @@ fn map_deal_row(row: &sqlx::postgres::PgRow) -> Result<DealResponse, sqlx::Error
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_deals).post(create_deal))
-        .route("/{id}", get(get_deal).patch(update_deal).delete(delete_deal))
+        .route(
+            "/{id}",
+            get(get_deal).patch(update_deal).delete(delete_deal),
+        )
 }
 
 pub async fn list_deals(
@@ -163,7 +166,9 @@ async fn ensure_party_in_workspace(
         .await?;
 
     if exists.is_none() {
-        return Err(ApiError::BadRequest("Party not found in workspace".to_string()));
+        return Err(ApiError::BadRequest(
+            "Party not found in workspace".to_string(),
+        ));
     }
     Ok(())
 }

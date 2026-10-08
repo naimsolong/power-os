@@ -112,10 +112,7 @@ pub struct DocumentSummary {
 #[derive(Debug)]
 pub enum LhdnError {
     Network(reqwest::Error),
-    Api {
-        status: StatusCode,
-        body: String,
-    },
+    Api { status: StatusCode, body: String },
     Token(String),
     Serialization(serde_json::Error),
 }

@@ -16,7 +16,9 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::lhdn::client::{DocumentStatusResponse, LhdnClient, LhdnError, LhdnSettings, SubmitPayload};
+use crate::lhdn::client::{
+    DocumentStatusResponse, LhdnClient, LhdnError, LhdnSettings, SubmitPayload,
+};
 use crate::lhdn::ubl::{build_ubl_json, BuyerInfo, SupplierInfo};
 use crate::routes::error::ApiError;
 use crate::routes::invoices::fetch_invoice_detail;
@@ -150,7 +152,10 @@ pub async fn submit_lhdn_invoice(
         .try_get("lhdn_base_url")
         .ok()
         .unwrap_or_else(|| {
-            if workspace_row.try_get::<bool, _>("lhdn_sandbox").unwrap_or(true) {
+            if workspace_row
+                .try_get::<bool, _>("lhdn_sandbox")
+                .unwrap_or(true)
+            {
                 "https://preprod-api.myinvois.hasil.gov.my".to_string()
             } else {
                 "https://api.myinvois.hasil.gov.my".to_string()
@@ -167,18 +172,15 @@ pub async fn submit_lhdn_invoice(
             "LHDN client credentials are not configured".to_string(),
         ));
     }
-    let supplier_tin = supplier_tin.ok_or_else(|| {
-        ApiError::BadRequest("Workspace LHDN TIN is not configured".to_string())
-    })?;
+    let supplier_tin = supplier_tin
+        .ok_or_else(|| ApiError::BadRequest("Workspace LHDN TIN is not configured".to_string()))?;
 
-    let party_row = query(
-        "SELECT name, tin FROM party WHERE id = $1 AND workspace_id = $2",
-    )
-    .bind(invoice.party_id.0)
-    .bind(auth_user.workspace_id.0)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|_| ApiError::NotFound)?;
+    let party_row = query("SELECT name, tin FROM party WHERE id = $1 AND workspace_id = $2")
+        .bind(invoice.party_id.0)
+        .bind(auth_user.workspace_id.0)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| ApiError::NotFound)?;
 
     let buyer_name: String = party_row.try_get("name")?;
     let buyer_tin: Option<String> = party_row.try_get("tin")?;
@@ -196,7 +198,8 @@ pub async fn submit_lhdn_invoice(
     );
 
     let ubl_json_string = ubl.to_string();
-    let document_base64 = base64::engine::general_purpose::STANDARD.encode(ubl_json_string.as_bytes());
+    let document_base64 =
+        base64::engine::general_purpose::STANDARD.encode(ubl_json_string.as_bytes());
 
     let wrapper = crate::lhdn::client::DocumentWrapper::new(
         "JSON".to_string(),
@@ -235,22 +238,21 @@ pub async fn submit_lhdn_invoice(
         Ok(response) => {
             let response_json = serde_json::to_value(&response).unwrap_or(Value::Null);
 
-            let (lhdn_uuid, status, error_message) = if let Some(doc) =
-                response.accepted_documents.first()
-            {
-                (Some(doc.uuid.clone()), "submitted".to_string(), None)
-            } else if let Some(rejected) = response.rejected_documents.first() {
-                (
-                    None,
-                    "error".to_string(),
-                    Some(format!(
-                        "Document rejected: {}",
-                        serde_json::to_string(&rejected.error).unwrap_or_default()
-                    )),
-                )
-            } else {
-                (None, "submitted".to_string(), None)
-            };
+            let (lhdn_uuid, status, error_message) =
+                if let Some(doc) = response.accepted_documents.first() {
+                    (Some(doc.uuid.clone()), "submitted".to_string(), None)
+                } else if let Some(rejected) = response.rejected_documents.first() {
+                    (
+                        None,
+                        "error".to_string(),
+                        Some(format!(
+                            "Document rejected: {}",
+                            serde_json::to_string(&rejected.error).unwrap_or_default()
+                        )),
+                    )
+                } else {
+                    (None, "submitted".to_string(), None)
+                };
 
             let row = query(
                 r#"
@@ -281,9 +283,9 @@ pub async fn submit_lhdn_invoice(
             error!("LHDN submission failed for invoice {}: {}", id.0, err);
             let (error_message, response_json) = match err {
                 LhdnError::Api { status, body } => {
-                    let value = serde_json::from_str(&body).unwrap_or_else(|_| {
-                        serde_json::json!({ "status": status.as_u16(), "raw": body })
-                    });
+                    let value = serde_json::from_str(&body).unwrap_or_else(
+                        |_| serde_json::json!({ "status": status.as_u16(), "raw": body }),
+                    );
                     (Some(format!("LHDN API error {status}")), Some(value))
                 }
                 LhdnError::Token(msg) => (Some(format!("LHDN authentication error: {msg}")), None),
@@ -377,10 +379,7 @@ pub async fn get_lhdn_status(
                     // Status endpoint returned without a status field; keep cached record.
                 }
                 Err(err) => {
-                    error!(
-                        "LHDN status poll failed for {}: {}",
-                        submission_uid, err
-                    );
+                    error!("LHDN status poll failed for {}: {}", submission_uid, err);
                 }
             }
         }

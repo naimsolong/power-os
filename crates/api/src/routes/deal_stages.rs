@@ -52,7 +52,9 @@ pub fn router() -> Router<AppState> {
         .route("/", get(list_deal_stages).post(create_deal_stage))
         .route(
             "/{id}",
-            get(get_deal_stage).patch(update_deal_stage).delete(delete_deal_stage),
+            get(get_deal_stage)
+                .patch(update_deal_stage)
+                .delete(delete_deal_stage),
         )
 }
 

@@ -9,7 +9,9 @@ import {
 import { AuthProvider } from "@/contexts/auth-provider";
 import { ProtectedRoute } from "@/components/protected-route";
 import { Layout } from "@/components/layout";
+import { ForgotPasswordPage } from "@/pages/forgot-password";
 import { LoginPage } from "@/pages/login";
+import { ResetPasswordPage } from "@/pages/reset-password";
 import { DashboardPage } from "@/pages/dashboard";
 import { ContactsPage } from "@/pages/contacts";
 import { CompaniesPage } from "@/pages/companies";
@@ -47,6 +49,14 @@ const router = createBrowserRouter([
       {
         path: "login",
         element: <LoginPage />,
+      },
+      {
+        path: "forgot-password",
+        element: <ForgotPasswordPage />,
+      },
+      {
+        path: "reset-password",
+        element: <ResetPasswordPage />,
       },
       {
         element: <ProtectedRoute />,

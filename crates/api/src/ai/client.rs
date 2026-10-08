@@ -150,7 +150,10 @@ pub struct Choice {
 pub enum AiError {
     NotConfigured,
     Network(reqwest::Error),
-    Api { status: reqwest::StatusCode, body: String },
+    Api {
+        status: reqwest::StatusCode,
+        body: String,
+    },
     Serialization(serde_json::Error),
 }
 
@@ -196,7 +199,10 @@ impl AiClient {
             return Err(AiError::NotConfigured);
         }
 
-        let url = format!("{}/chat/completions", self.config.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            self.config.base_url.trim_end_matches('/')
+        );
         info!("sending chat completion request to {}", url);
 
         let request_body = ChatCompletionRequest {

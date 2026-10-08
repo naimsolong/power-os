@@ -89,7 +89,10 @@ fn map_party_row(row: &sqlx::postgres::PgRow) -> Result<PartyResponse, sqlx::Err
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_parties).post(create_party))
-        .route("/{id}", get(get_party).patch(update_party).delete(delete_party))
+        .route(
+            "/{id}",
+            get(get_party).patch(update_party).delete(delete_party),
+        )
 }
 
 pub async fn list_parties(

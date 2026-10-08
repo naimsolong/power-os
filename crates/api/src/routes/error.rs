@@ -27,7 +27,10 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "Not found".to_string()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
-            ApiError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string()),
+            ApiError::Internal => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error".to_string(),
+            ),
         };
         (status, Json(ErrorBody { error: message })).into_response()
     }

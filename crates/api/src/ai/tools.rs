@@ -144,11 +144,7 @@ async fn list_parties(
     Ok(json!({ "parties": parties }))
 }
 
-async fn list_deals(
-    db: &PgPool,
-    workspace_id: Uuid,
-    arguments: &Value,
-) -> Result<Value, ApiError> {
+async fn list_deals(db: &PgPool, workspace_id: Uuid, arguments: &Value) -> Result<Value, ApiError> {
     let search = arguments["search"].as_str();
 
     let rows = query(

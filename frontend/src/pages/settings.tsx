@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Save } from "lucide-react";
+import { Save, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -9,14 +9,33 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+
 import {
   useLhdnSettings,
   useUpdateLhdnSettings,
 } from "@/hooks/use-lhdn-settings";
+import {
+  useRemoveWorkspaceUser,
+  useUpdateWorkspaceUserRole,
+  useWorkspaceUsers,
+} from "@/hooks/use-workspace-users";
+import { useAuth } from "@/hooks/use-auth";
+import {
+  WORKSPACE_ROLE_LABELS,
+  WORKSPACE_ROLE_OPTIONS,
+  type WorkspaceRole,
+} from "@/lib/api";
 
 export function SettingsPage() {
+  const { user } = useAuth();
   const { data: settings, isLoading } = useLhdnSettings();
   const updateSettings = useUpdateLhdnSettings();
+  const { data: users, isLoading: isLoadingUsers } = useWorkspaceUsers();
+  const updateRole = useUpdateWorkspaceUserRole();
+  const removeUser = useRemoveWorkspaceUser();
+
+  const canManageUsers =
+    user?.role === "owner" || user?.role === "admin";
 
   const [form, setForm] = useState({
     lhdn_client_id: "",
@@ -160,6 +179,79 @@ export function SettingsPage() {
               </Button>
             </div>
           </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Users className="h-4 w-4" />
+            Workspace Users
+          </CardTitle>
+          <CardDescription>
+            Manage roles for people with access to this workspace.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoadingUsers ? (
+            <p className="text-sm text-muted-foreground">Loading users…</p>
+          ) : !users || users.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No users found.</p>
+          ) : (
+            <div className="divide-y">
+              {users.map((workspaceUser) => (
+                <div
+                  key={workspaceUser.user_id}
+                  className="flex items-center justify-between py-3"
+                >
+                  <div>
+                    <p className="text-sm font-medium">
+                      {workspaceUser.name ?? workspaceUser.email}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {workspaceUser.email}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {canManageUsers && workspaceUser.user_id !== user?.user_id ? (
+                      <>
+                        <select
+                          value={workspaceUser.role}
+                          onChange={(event) =>
+                            updateRole.mutate({
+                              userId: workspaceUser.user_id,
+                              role: event.target.value as WorkspaceRole,
+                            })
+                          }
+                          disabled={updateRole.isPending}
+                          className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                        >
+                          {WORKSPACE_ROLE_OPTIONS.map((role) => (
+                            <option key={role} value={role}>
+                              {WORKSPACE_ROLE_LABELS[role]}
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="Remove user"
+                          onClick={() => removeUser.mutate(workspaceUser.user_id)}
+                          disabled={removeUser.isPending}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">
+                        {WORKSPACE_ROLE_LABELS[workspaceUser.role]}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

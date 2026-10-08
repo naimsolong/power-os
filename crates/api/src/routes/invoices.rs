@@ -8,7 +8,9 @@ use axum::{
     Json, Router,
 };
 use bigdecimal::{BigDecimal, Zero};
-use power_os_domain::{AccountId, InvoiceId, InvoiceLineId, JournalEntryId, JournalLineId, PartyId, WorkspaceId};
+use power_os_domain::{
+    AccountId, InvoiceId, InvoiceLineId, JournalEntryId, JournalLineId, PartyId, WorkspaceId,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{query, Row};
 use time::Date;
@@ -169,11 +171,25 @@ fn map_invoice_line_row(row: &sqlx::postgres::PgRow) -> Result<InvoiceLineRespon
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_invoices).post(create_invoice))
-        .route("/{id}", get(get_invoice).patch(update_invoice).delete(delete_invoice))
-        .route("/{id}/lines", get(list_invoice_lines).post(create_invoice_line))
-        .route("/{id}/lines/{line_id}", patch(update_invoice_line).delete(delete_invoice_line))
+        .route(
+            "/{id}",
+            get(get_invoice)
+                .patch(update_invoice)
+                .delete(delete_invoice),
+        )
+        .route(
+            "/{id}/lines",
+            get(list_invoice_lines).post(create_invoice_line),
+        )
+        .route(
+            "/{id}/lines/{line_id}",
+            patch(update_invoice_line).delete(delete_invoice_line),
+        )
         .route("/{id}/post", post(post_invoice))
-        .route("/{id}/submit-lhdn", post(lhdn::handlers::submit_lhdn_invoice))
+        .route(
+            "/{id}/submit-lhdn",
+            post(lhdn::handlers::submit_lhdn_invoice),
+        )
         .route("/{id}/lhdn-status", get(lhdn::handlers::get_lhdn_status))
 }
 
@@ -189,7 +205,9 @@ async fn ensure_party_in_workspace(
         .await?;
 
     if exists.is_none() {
-        return Err(ApiError::BadRequest("Party not found in workspace".to_string()));
+        return Err(ApiError::BadRequest(
+            "Party not found in workspace".to_string(),
+        ));
     }
     Ok(())
 }
@@ -496,13 +514,12 @@ pub async fn update_invoice_line(
         return Err(ApiError::NotFound);
     }
 
-    let existing = query(
-        "SELECT quantity, unit_price FROM invoice_line WHERE id = $1 AND invoice_id = $2"
-    )
-    .bind(line_id.0)
-    .bind(id.0)
-    .fetch_optional(&state.db)
-    .await?;
+    let existing =
+        query("SELECT quantity, unit_price FROM invoice_line WHERE id = $1 AND invoice_id = $2")
+            .bind(line_id.0)
+            .bind(id.0)
+            .fetch_optional(&state.db)
+            .await?;
 
     let (quantity, unit_price) = match existing {
         Some(row) => {
@@ -577,7 +594,9 @@ async fn ensure_account_in_workspace(
         .await?;
 
     if exists.is_none() {
-        return Err(ApiError::BadRequest("Account not found in workspace".to_string()));
+        return Err(ApiError::BadRequest(
+            "Account not found in workspace".to_string(),
+        ));
     }
     Ok(())
 }
@@ -589,13 +608,11 @@ async fn get_or_create_default_account(
     name: &str,
     account_type: &str,
 ) -> Result<AccountId, ApiError> {
-    let row = query(
-        "SELECT id FROM account WHERE workspace_id = $1 AND code = $2"
-    )
-    .bind(workspace_id.0)
-    .bind(code)
-    .fetch_optional(&mut *db)
-    .await?;
+    let row = query("SELECT id FROM account WHERE workspace_id = $1 AND code = $2")
+        .bind(workspace_id.0)
+        .bind(code)
+        .fetch_optional(&mut *db)
+        .await?;
 
     if let Some(row) = row {
         let id: uuid::Uuid = row.try_get("id")?;
@@ -764,4 +781,3 @@ pub async fn post_invoice(
         }),
     ))
 }
-

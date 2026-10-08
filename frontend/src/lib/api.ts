@@ -1,10 +1,21 @@
 const API_BASE = "/api";
 
+export type WorkspaceRole = "owner" | "admin" | "member";
+
+export const WORKSPACE_ROLE_LABELS: Record<WorkspaceRole, string> = {
+  owner: "Owner",
+  admin: "Admin",
+  member: "Member",
+};
+
+export const WORKSPACE_ROLE_OPTIONS: WorkspaceRole[] = ["owner", "admin", "member"];
+
 export interface AuthUser {
   user_id: string;
   workspace_id: string;
   email: string;
   name: string | null;
+  role: WorkspaceRole;
 }
 
 export interface LoginRequest {
@@ -51,6 +62,95 @@ export async function loginUser(credentials: LoginRequest): Promise<AuthUser> {
     body: JSON.stringify(credentials),
   });
   return handleResponse<AuthUser>(response);
+}
+
+export interface ForgotPasswordRequest {
+  email: string;
+}
+
+export interface ResetPasswordRequest {
+  token: string;
+  password: string;
+}
+
+export interface PasswordResetResponse {
+  message: string;
+}
+
+export interface WorkspaceUser {
+  user_id: string;
+  email: string;
+  name: string | null;
+  role: WorkspaceRole;
+}
+
+export async function forgotPassword(
+  request: ForgotPasswordRequest
+): Promise<PasswordResetResponse> {
+  const response = await fetch(`${API_BASE}/auth/forgot-password`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<PasswordResetResponse>(response);
+}
+
+export async function resetPassword(
+  request: ResetPasswordRequest
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/auth/reset-password`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+}
+
+export async function fetchWorkspaceUsers(): Promise<WorkspaceUser[]> {
+  const response = await fetch(`${API_BASE}/auth/workspace/users`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  return handleResponse<WorkspaceUser[]>(response);
+}
+
+export async function updateWorkspaceUserRole(
+  userId: string,
+  role: WorkspaceRole
+): Promise<WorkspaceUser> {
+  const response = await fetch(`${API_BASE}/auth/workspace/users/${userId}/role`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ role }),
+  });
+  return handleResponse<WorkspaceUser>(response);
+}
+
+export async function removeWorkspaceUser(userId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/auth/workspace/users/${userId}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
 }
 
 export async function logoutUser(): Promise<void> {

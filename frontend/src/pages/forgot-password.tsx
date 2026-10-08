@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -11,15 +10,28 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { forgotPassword } from "@/lib/api";
 
-export function LoginPage() {
-  const { login, isLoading, error } = useAuth();
+export function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await login({ email, password });
+    setIsLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const response = await forgotPassword({ email });
+      setMessage(response.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (
@@ -29,14 +41,14 @@ export function LoginPage() {
           <CardTitle className="text-2xl font-semibold tracking-tight">
             Power OS
           </CardTitle>
-          <CardDescription>Sign in to your account</CardDescription>
+          <CardDescription>Reset your password</CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <label
                 htmlFor="email"
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                className="text-sm font-medium leading-none"
               >
                 Email
               </label>
@@ -51,24 +63,11 @@ export function LoginPage() {
                 disabled={isLoading}
               />
             </div>
-            <div className="space-y-2">
-              <label
-                htmlFor="password"
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-              >
-                Password
-              </label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="••••••••"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                disabled={isLoading}
-              />
-            </div>
+            {message && (
+              <div className="rounded-md bg-green-600/10 px-3 py-2 text-sm text-green-700">
+                {message}
+              </div>
+            )}
             {error && (
               <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {error}
@@ -77,13 +76,13 @@ export function LoginPage() {
           </CardContent>
           <CardFooter className="flex flex-col gap-2">
             <Button type="submit" className="w-full" disabled={isLoading}>
-              {isLoading ? "Signing in…" : "Sign in"}
+              {isLoading ? "Sending…" : "Send reset link"}
             </Button>
             <Link
-              to="/forgot-password"
+              to="/login"
               className="text-sm text-muted-foreground hover:text-foreground"
             >
-              Forgot password?
+              Back to sign in
             </Link>
           </CardFooter>
         </form>

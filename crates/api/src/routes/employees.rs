@@ -95,7 +95,12 @@ fn map_employee_row(row: &sqlx::postgres::PgRow) -> Result<EmployeeResponse, sql
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_employees).post(create_employee))
-        .route("/{id}", get(get_employee).patch(update_employee).delete(delete_employee))
+        .route(
+            "/{id}",
+            get(get_employee)
+                .patch(update_employee)
+                .delete(delete_employee),
+        )
 }
 
 pub async fn list_employees(
@@ -148,7 +153,11 @@ pub async fn create_employee(
 
     ensure_party_in_workspace(&state.db, payload.party_id, auth_user.workspace_id).await?;
 
-    let status = payload.status.as_ref().map(|s| s.as_str()).unwrap_or("active");
+    let status = payload
+        .status
+        .as_ref()
+        .map(|s| s.as_str())
+        .unwrap_or("active");
 
     let row = query(
         r#"
@@ -172,7 +181,10 @@ pub async fn create_employee(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(map_employee_row_with_party(&state.db, &row).await?)))
+    Ok((
+        StatusCode::CREATED,
+        Json(map_employee_row_with_party(&state.db, &row).await?),
+    ))
 }
 
 pub async fn get_employee(
@@ -252,7 +264,10 @@ pub async fn update_employee(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::OK, Json(map_employee_row_with_party(&state.db, &row).await?)))
+    Ok((
+        StatusCode::OK,
+        Json(map_employee_row_with_party(&state.db, &row).await?),
+    ))
 }
 
 pub async fn delete_employee(

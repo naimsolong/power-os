@@ -81,9 +81,7 @@ pub struct JournalEntryResponse {
     pub lines: Vec<JournalLineResponse>,
 }
 
-fn map_journal_entry_row(
-    row: &sqlx::postgres::PgRow,
-) -> Result<JournalEntryResponse, sqlx::Error> {
+fn map_journal_entry_row(row: &sqlx::postgres::PgRow) -> Result<JournalEntryResponse, sqlx::Error> {
     Ok(JournalEntryResponse {
         id: JournalEntryId(row.try_get("id")?),
         workspace_id: WorkspaceId(row.try_get("workspace_id")?),
@@ -95,9 +93,7 @@ fn map_journal_entry_row(
     })
 }
 
-fn map_journal_line_row(
-    row: &sqlx::postgres::PgRow,
-) -> Result<JournalLineResponse, sqlx::Error> {
+fn map_journal_line_row(row: &sqlx::postgres::PgRow) -> Result<JournalLineResponse, sqlx::Error> {
     Ok(JournalLineResponse {
         id: JournalLineId(row.try_get("id")?),
         journal_entry_id: JournalEntryId(row.try_get("journal_entry_id")?),
@@ -127,7 +123,9 @@ async fn ensure_account_in_workspace(
         .await?;
 
     if exists.is_none() {
-        return Err(ApiError::BadRequest("Account not found in workspace".to_string()));
+        return Err(ApiError::BadRequest(
+            "Account not found in workspace".to_string(),
+        ));
     }
     Ok(())
 }
@@ -144,7 +142,9 @@ async fn ensure_party_in_workspace(
         .await?;
 
     if exists.is_none() {
-        return Err(ApiError::BadRequest("Party not found in workspace".to_string()));
+        return Err(ApiError::BadRequest(
+            "Party not found in workspace".to_string(),
+        ));
     }
     Ok(())
 }
@@ -270,7 +270,11 @@ pub async fn create_journal_entry(
         }
     }
 
-    let status = payload.status.as_ref().map(|s| s.as_str()).unwrap_or("draft");
+    let status = payload
+        .status
+        .as_ref()
+        .map(|s| s.as_str())
+        .unwrap_or("draft");
     let journal_entry_id = JournalEntryId::new();
 
     let mut tx = state.db.begin().await?;

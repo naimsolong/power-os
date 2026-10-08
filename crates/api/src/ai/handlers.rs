@@ -62,15 +62,35 @@ pub async fn chat(
     }
 
     let session_id = match payload.session_id {
-        Some(id) => ensure_session_belongs_to_user(&state.db, id, auth_user.user_id.0, auth_user.workspace_id.0).await?,
-        None => create_session(&state.db, auth_user.workspace_id.0, auth_user.user_id.0, &payload.message).await?,
+        Some(id) => {
+            ensure_session_belongs_to_user(
+                &state.db,
+                id,
+                auth_user.user_id.0,
+                auth_user.workspace_id.0,
+            )
+            .await?
+        }
+        None => {
+            create_session(
+                &state.db,
+                auth_user.workspace_id.0,
+                auth_user.user_id.0,
+                &payload.message,
+            )
+            .await?
+        }
     };
 
     let mut messages = load_messages(&state.db, session_id).await?;
     messages.push(Message::user(payload.message));
 
     let tools = tool_definitions();
-    let assistant_message = state.ai.chat(messages.clone(), tools).await.map_err(map_ai_error)?;
+    let assistant_message = state
+        .ai
+        .chat(messages.clone(), tools)
+        .await
+        .map_err(map_ai_error)?;
 
     let mut tool_calls_log: Vec<ToolCallLog> = Vec::new();
     let mut current_messages = messages.clone();
@@ -80,7 +100,8 @@ pub async fn chat(
         current_messages.push(assistant_message);
 
         for tool_call in tool_calls {
-            let arguments: Value = serde_json::from_str(&tool_call.function.arguments).unwrap_or(Value::Null);
+            let arguments: Value =
+                serde_json::from_str(&tool_call.function.arguments).unwrap_or(Value::Null);
 
             let (result, error_message) = match execute_tool(
                 &state.db,
@@ -149,7 +170,11 @@ pub async fn chat(
             current_messages.push(Message::tool(tool_call.id.clone(), tool_result_json));
         }
 
-        let final_message = state.ai.chat(current_messages, tool_definitions()).await.map_err(map_ai_error)?;
+        let final_message = state
+            .ai
+            .chat(current_messages, tool_definitions())
+            .await
+            .map_err(map_ai_error)?;
         save_assistant_message(&state.db, session_id, &final_message).await?;
 
         Ok((
@@ -180,14 +205,13 @@ async fn ensure_session_belongs_to_user(
     user_id: Uuid,
     workspace_id: Uuid,
 ) -> Result<Uuid, ApiError> {
-    let exists = query(
-        "SELECT 1 FROM ai_session WHERE id = $1 AND user_id = $2 AND workspace_id = $3",
-    )
-    .bind(session_id)
-    .bind(user_id)
-    .bind(workspace_id)
-    .fetch_optional(db)
-    .await?;
+    let exists =
+        query("SELECT 1 FROM ai_session WHERE id = $1 AND user_id = $2 AND workspace_id = $3")
+            .bind(session_id)
+            .bind(user_id)
+            .bind(workspace_id)
+            .fetch_optional(db)
+            .await?;
 
     if exists.is_none() {
         return Err(ApiError::NotFound);
@@ -254,7 +278,10 @@ async fn load_messages(db: &sqlx::PgPool, session_id: Uuid) -> Result<Vec<Messag
                     Message::assistant(content.unwrap_or_default())
                 }
             }
-            "tool" => Message::tool(tool_call_id.unwrap_or_default(), content.unwrap_or_default()),
+            "tool" => Message::tool(
+                tool_call_id.unwrap_or_default(),
+                content.unwrap_or_default(),
+            ),
             _ => Message::assistant(content.unwrap_or_default()),
         };
 
@@ -277,7 +304,12 @@ async fn save_assistant_message(
     )
     .bind(session_id)
     .bind(&message.content)
-    .bind(&message.tool_calls.as_ref().map(|tc| serde_json::to_value(tc).unwrap_or(Value::Null)))
+    .bind(
+        &message
+            .tool_calls
+            .as_ref()
+            .map(|tc| serde_json::to_value(tc).unwrap_or(Value::Null)),
+    )
     .execute(db)
     .await?;
 
