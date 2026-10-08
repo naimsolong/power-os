@@ -101,44 +101,48 @@ pub async fn chat(
                 }
             };
 
-            let tool_call_record = query(
-                r#"
-                INSERT INTO ai_tool_call (
-                    session_id, tool_name, arguments, result, error_message
-                )
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id
-                "#,
-            )
-            .bind(session_id)
-            .bind(&tool_call.function.name)
-            .bind(&arguments)
-            .bind(&result)
-            .bind(error_message.as_deref())
-            .fetch_one(&state.db)
-            .await?;
-
-            let message_id: Uuid = tool_call_record.try_get("id")?;
-
             tool_calls_log.push(ToolCallLog {
                 tool_name: tool_call.function.name.clone(),
-                arguments,
-                result,
-                error_message,
+                arguments: arguments.clone(),
+                result: result.clone(),
+                error_message: error_message.clone(),
             });
 
-            let tool_result_json = serde_json::to_string(&tool_calls_log.last().unwrap().result)
-                .unwrap_or_else(|_| tool_calls_log.last().unwrap().error_message.clone().unwrap_or_default());
+            let tool_result_json = if let Some(err) = &error_message {
+                serde_json::json!({ "error": err }).to_string()
+            } else {
+                serde_json::to_string(&result).unwrap_or_default()
+            };
 
-            query(
+            let tool_message_record = query(
                 r#"
                 INSERT INTO ai_message (session_id, role, content, tool_call_id)
                 VALUES ($1, 'tool', $2, $3)
+                RETURNING id
                 "#,
             )
             .bind(session_id)
             .bind(&tool_result_json)
             .bind(&tool_call.id)
+            .fetch_one(&state.db)
+            .await?;
+
+            let tool_message_id: Uuid = tool_message_record.try_get("id")?;
+
+            query(
+                r#"
+                INSERT INTO ai_tool_call (
+                    session_id, message_id, tool_name, arguments, result, error_message
+                )
+                VALUES ($1, $2, $3, $4, $5, $6)
+                "#,
+            )
+            .bind(session_id)
+            .bind(tool_message_id)
+            .bind(&tool_call.function.name)
+            .bind(&arguments)
+            .bind(&result)
+            .bind(error_message.as_deref())
             .execute(&state.db)
             .await?;
 

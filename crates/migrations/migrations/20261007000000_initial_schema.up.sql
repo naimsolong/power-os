@@ -124,18 +124,6 @@ CREATE TABLE deal (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE employee (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
-    user_id UUID REFERENCES "user"(id) ON DELETE SET NULL,
-    employee_number TEXT,
-    job_title TEXT,
-    department TEXT,
-    hire_date DATE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE TABLE activity (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
