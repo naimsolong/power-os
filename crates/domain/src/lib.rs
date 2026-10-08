@@ -4,3 +4,4 @@
 pub mod ids;
 
 pub use ids::*;
+pub use rust_decimal::Decimal;
