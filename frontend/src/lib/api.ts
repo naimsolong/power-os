@@ -404,3 +404,103 @@ export async function fetchInvoiceLhdnStatus(
   });
   return handleResponse<LhdnSubmission>(response);
 }
+
+export type EmployeeStatus = "active" | "inactive";
+
+export interface Employee {
+  id: string;
+  workspace_id: string;
+  party_id: string;
+  employee_code: string;
+  job_title: string | null;
+  department: string | null;
+  hire_date: string | null;
+  status: EmployeeStatus;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
+export interface EmployeeCreate {
+  party_id: string;
+  employee_code: string;
+  job_title?: string;
+  department?: string;
+  hire_date?: string;
+  status?: EmployeeStatus;
+}
+
+export type EmployeeUpdate = Partial<EmployeeCreate>;
+
+export const EMPLOYEE_STATUS_LABELS: Record<EmployeeStatus, string> = {
+  active: "Active",
+  inactive: "Inactive",
+};
+
+export const EMPLOYEE_STATUS_OPTIONS: EmployeeStatus[] = ["active", "inactive"];
+
+export async function fetchEmployees(
+  status?: EmployeeStatus,
+  search?: string
+): Promise<Employee[]> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (search) params.set("search", search);
+  const query = params.toString();
+  const url = `${API_BASE}/employees${query ? `?${query}` : ""}`;
+
+  const response = await fetch(url, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  return handleResponse<Employee[]>(response);
+}
+
+export async function fetchEmployee(id: string): Promise<Employee> {
+  const response = await fetch(`${API_BASE}/employees/${id}`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  return handleResponse<Employee>(response);
+}
+
+export async function createEmployee(employee: EmployeeCreate): Promise<Employee> {
+  const response = await fetch(`${API_BASE}/employees`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(employee),
+  });
+  return handleResponse<Employee>(response);
+}
+
+export async function updateEmployee(
+  id: string,
+  employee: EmployeeUpdate
+): Promise<Employee> {
+  const response = await fetch(`${API_BASE}/employees/${id}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(employee),
+  });
+  return handleResponse<Employee>(response);
+}
+
+export async function deleteEmployee(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/employees/${id}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "Unknown error");
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+}

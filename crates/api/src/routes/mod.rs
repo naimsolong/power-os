@@ -9,6 +9,7 @@ use crate::state::AppState;
 
 mod deal_stages;
 mod deals;
+pub(crate) mod employees;
 pub(crate) mod error;
 mod health;
 pub(crate) mod invoices;
@@ -22,6 +23,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/parties", parties::router())
         .nest("/api/deal-stages", deal_stages::router())
         .nest("/api/deals", deals::router())
+        .nest("/api/employees", employees::router())
         .nest("/api/invoices", invoices::router())
         .nest("/api/journal-entries", journal_entries::router())
         .route(
