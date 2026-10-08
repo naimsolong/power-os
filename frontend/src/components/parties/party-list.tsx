@@ -72,9 +72,9 @@ export function PartyList({
     return parties.filter(
       (party) =>
         party.name.toLowerCase().includes(term) ||
-        party.email.toLowerCase().includes(term) ||
-        party.phone.toLowerCase().includes(term) ||
-        party.address.toLowerCase().includes(term)
+        (party.email ?? "").toLowerCase().includes(term) ||
+        (party.phone ?? "").toLowerCase().includes(term) ||
+        (party.address ?? "").toLowerCase().includes(term)
     );
   }, [parties, search]);
 
@@ -212,9 +212,9 @@ export function PartyList({
                   onClick={() => handleEdit(party.id)}
                 >
                   <TableCell className="font-medium">{party.name}</TableCell>
-                  <TableCell>{party.email}</TableCell>
-                  <TableCell>{party.phone}</TableCell>
-                  <TableCell>{party.address}</TableCell>
+                  <TableCell>{party.email ?? "—"}</TableCell>
+                  <TableCell>{party.phone ?? "—"}</TableCell>
+                  <TableCell>{party.address ?? "—"}</TableCell>
                   <TableCell className="capitalize">
                     {PARTY_TYPE_LABELS[party.party_type]}
                   </TableCell>

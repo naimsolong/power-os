@@ -47,9 +47,9 @@ function buildInitialForm(
   if (party) {
     return {
       name: party.name,
-      email: party.email,
-      phone: party.phone,
-      address: party.address,
+      email: party.email ?? "",
+      phone: party.phone ?? "",
+      address: party.address ?? "",
       party_type: party.party_type,
     };
   }

@@ -4,7 +4,6 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
     routing::{delete, get, patch, post},
     Json, Router,
 };
@@ -52,7 +51,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_deal_stages).post(create_deal_stage))
         .route(
-            "/:id",
+            "/{id}",
             get(get_deal_stage).patch(update_deal_stage).delete(delete_deal_stage),
         )
 }

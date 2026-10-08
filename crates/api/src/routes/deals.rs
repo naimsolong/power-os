@@ -4,10 +4,10 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
     routing::{delete, get, patch, post},
     Json, Router,
 };
+use bigdecimal::BigDecimal;
 use power_os_domain::{DealId, DealStageId, PartyId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use sqlx::{query, Row};
@@ -24,7 +24,7 @@ pub struct CreateDealRequest {
     #[validate(length(min = 1, message = "Name is required"))]
     pub name: String,
     pub stage_id: Option<DealStageId>,
-    pub value: Option<f64>,
+    pub value: Option<BigDecimal>,
     pub currency: Option<String>,
     pub expected_close_date: Option<Date>,
 }
@@ -35,7 +35,7 @@ pub struct UpdateDealRequest {
     #[validate(length(min = 1, message = "Name is required"))]
     pub name: Option<String>,
     pub stage_id: Option<DealStageId>,
-    pub value: Option<f64>,
+    pub value: Option<BigDecimal>,
     pub currency: Option<String>,
     pub expected_close_date: Option<Date>,
 }
@@ -54,7 +54,7 @@ pub struct DealResponse {
     pub name: String,
     pub stage_id: Option<DealStageId>,
     pub stage_name: Option<String>,
-    pub value: Option<f64>,
+    pub value: Option<BigDecimal>,
     pub currency: String,
     pub expected_close_date: Option<Date>,
 }
@@ -76,7 +76,7 @@ fn map_deal_row(row: &sqlx::postgres::PgRow) -> Result<DealResponse, sqlx::Error
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_deals).post(create_deal))
-        .route("/:id", get(get_deal).patch(update_deal).delete(delete_deal))
+        .route("/{id}", get(get_deal).patch(update_deal).delete(delete_deal))
 }
 
 pub async fn list_deals(
@@ -116,6 +116,39 @@ pub async fn list_deals(
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok((StatusCode::OK, Json(deals)))
+}
+
+async fn fetch_deal_row(
+    db: &sqlx::PgPool,
+    deal_id: DealId,
+    workspace_id: WorkspaceId,
+) -> Result<DealResponse, ApiError> {
+    let row = query(
+        r#"
+        SELECT
+            d.id,
+            d.workspace_id,
+            d.party_id,
+            d.name,
+            d.stage_id,
+            ds.name AS stage_name,
+            d.value,
+            d.currency,
+            d.expected_close_date
+        FROM deal d
+        LEFT JOIN deal_stage ds ON ds.id = d.stage_id AND ds.workspace_id = d.workspace_id
+        WHERE d.id = $1 AND d.workspace_id = $2
+        "#,
+    )
+    .bind(deal_id.0)
+    .bind(workspace_id.0)
+    .fetch_optional(db)
+    .await?;
+
+    match row {
+        Some(row) => Ok(map_deal_row(&row)?),
+        None => Err(ApiError::NotFound),
+    }
 }
 
 async fn ensure_party_in_workspace(
@@ -170,20 +203,10 @@ pub async fn create_deal(
     let deal_id = DealId::new();
     let currency = payload.currency.as_deref().unwrap_or("MYR");
 
-    let row = query(
+    query(
         r#"
         INSERT INTO deal (id, workspace_id, party_id, name, stage_id, value, currency, expected_close_date)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING
-            id,
-            workspace_id,
-            party_id,
-            name,
-            stage_id,
-            (SELECT name FROM deal_stage WHERE id = stage_id AND workspace_id = deal.workspace_id) AS stage_name,
-            value,
-            currency,
-            expected_close_date
         "#,
     )
     .bind(deal_id.0)
@@ -194,10 +217,11 @@ pub async fn create_deal(
     .bind(payload.value)
     .bind(currency)
     .bind(payload.expected_close_date)
-    .fetch_one(&state.db)
+    .execute(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(map_deal_row(&row)?)))
+    let row = fetch_deal_row(&state.db, deal_id, auth_user.workspace_id).await?;
+    Ok((StatusCode::CREATED, Json(row)))
 }
 
 pub async fn get_deal(
@@ -259,7 +283,7 @@ pub async fn update_deal(
         ensure_stage_in_workspace(&state.db, stage_id, auth_user.workspace_id).await?;
     }
 
-    let row = query(
+    query(
         r#"
         UPDATE deal
         SET
@@ -271,16 +295,6 @@ pub async fn update_deal(
             expected_close_date = COALESCE($8, expected_close_date),
             updated_at = now()
         WHERE id = $1 AND workspace_id = $2
-        RETURNING
-            id,
-            workspace_id,
-            party_id,
-            name,
-            stage_id,
-            (SELECT name FROM deal_stage WHERE id = deal.stage_id AND workspace_id = deal.workspace_id) AS stage_name,
-            value,
-            currency,
-            expected_close_date
         "#,
     )
     .bind(id.0)
@@ -291,10 +305,11 @@ pub async fn update_deal(
     .bind(payload.value)
     .bind(payload.currency.as_deref())
     .bind(payload.expected_close_date)
-    .fetch_one(&state.db)
+    .execute(&state.db)
     .await?;
 
-    Ok((StatusCode::OK, Json(map_deal_row(&row)?)))
+    let row = fetch_deal_row(&state.db, id, auth_user.workspace_id).await?;
+    Ok((StatusCode::OK, Json(row)))
 }
 
 pub async fn delete_deal(
