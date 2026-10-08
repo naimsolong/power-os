@@ -405,6 +405,39 @@ export async function fetchInvoiceLhdnStatus(
   return handleResponse<LhdnSubmission>(response);
 }
 
+export interface AiToolCall {
+  tool_name: string;
+  arguments: unknown;
+  result: unknown;
+  error_message: string | null;
+}
+
+export interface AiChatRequest {
+  session_id?: string;
+  message: string;
+}
+
+export interface AiChatResponse {
+  session_id: string;
+  message: string;
+  tool_calls: AiToolCall[];
+}
+
+export async function sendAiMessage(
+  request: AiChatRequest
+): Promise<AiChatResponse> {
+  const response = await fetch(`${API_BASE}/ai/chat`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<AiChatResponse>(response);
+}
+
 export type EmployeeStatus = "active" | "inactive";
 
 export interface Employee {

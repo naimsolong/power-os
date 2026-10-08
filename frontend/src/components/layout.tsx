@@ -6,6 +6,7 @@ import {
   Handshake,
   FileText,
   Briefcase,
+  Sparkles,
   Settings,
   LogOut,
   User,
@@ -21,6 +22,7 @@ const navItems = [
   { to: "/deals", label: "Deals", icon: Handshake },
   { to: "/invoices", label: "Invoices", icon: FileText },
   { to: "/employees", label: "Employees", icon: Briefcase },
+  { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

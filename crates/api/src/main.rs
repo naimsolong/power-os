@@ -10,6 +10,7 @@ use tower_sessions::{cookie::SameSite, Expiry, SessionManagerLayer};
 use tower_sessions_sqlx_store::PostgresStore;
 use tracing::info;
 
+mod ai;
 mod auth;
 mod lhdn;
 mod routes;

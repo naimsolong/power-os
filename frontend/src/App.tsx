@@ -15,6 +15,7 @@ import { ContactsPage } from "@/pages/contacts";
 import { CompaniesPage } from "@/pages/companies";
 import { DealsPage } from "@/pages/deals";
 import { InvoicesPage } from "@/pages/invoices";
+import { AiAssistantPage } from "@/pages/ai-assistant";
 import { EmployeesPage } from "@/pages/employees";
 import { SettingsPage } from "@/pages/settings";
 
@@ -59,6 +60,7 @@ const router = createBrowserRouter([
               { path: "deals", element: <DealsPage /> },
               { path: "invoices", element: <InvoicesPage /> },
               { path: "employees", element: <EmployeesPage /> },
+              { path: "ai-assistant", element: <AiAssistantPage /> },
               { path: "settings", element: <SettingsPage /> },
               { path: "*", element: <Navigate to="/" replace /> },
             ],

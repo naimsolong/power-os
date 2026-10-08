@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Power OS Contributors
 
-use axum::{routing::get, Router};
+use axum::{routing::get, routing::post, Router};
 
+use crate::ai;
 use crate::auth;
 use crate::lhdn;
 use crate::state::AppState;
@@ -26,6 +27,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/employees", employees::router())
         .nest("/api/invoices", invoices::router())
         .nest("/api/journal-entries", journal_entries::router())
+        .route("/api/ai/chat", post(ai::handlers::chat))
         .route(
             "/api/workspace/lhdn-settings",
             axum::routing::get(lhdn::handlers::get_lhdn_settings)

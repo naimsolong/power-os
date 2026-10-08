@@ -44,3 +44,14 @@ impl From<validator::ValidationErrors> for ApiError {
         ApiError::BadRequest(err.to_string())
     }
 }
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApiError::BadRequest(m) => write!(f, "{m}"),
+            ApiError::NotFound => write!(f, "Not found"),
+            ApiError::Conflict(m) => write!(f, "{m}"),
+            ApiError::Internal => write!(f, "Internal error"),
+        }
+    }
+}
