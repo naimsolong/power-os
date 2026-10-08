@@ -36,7 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     onSuccess: async () => {
       setAuthError(null);
       await refetch();
-      navigate("/", { replace: true });
+      navigate("/dashboard", { replace: true });
     },
     onError: (error) => {
       setAuthError(error.message);

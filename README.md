@@ -2,6 +2,23 @@
 
 Open-source, self-hostable business operating system for Malaysian SMEs.
 
+- **MIT licensed** — fork it, run it, resell it.
+- **Self-hostable** — one Docker Compose file on a single VPS.
+- **Malaysian compliance-first** — LHDN MyInvois e-Invoice, with EPF/SOCSO/EIS/PCB and SST on the roadmap.
+- **One record** — a person or organisation can be a lead, customer, vendor, and employee without data duplication.
+- **Read-only AI by default** — ask questions across CRM, finance, and people data; every tool call is logged.
+
+## Phase 1 MVP features
+
+| Pillar | Features |
+|--------|----------|
+| Auth | Registration, login, logout, password reset, workspace creation, owner/admin/member roles |
+| CRM | Contacts, companies, deals, deal stages, pipelines |
+| Finance | Chart of accounts, invoices, invoice lines, double-entry journal entries |
+| Compliance | LHDN MyInvois sandbox submission and status polling |
+| People | Employee directory linked to the unified party model |
+| AI | Chat assistant with read-only tools and full provenance logging |
+
 ## Quick start (self-hosted)
 
 This repository is designed to run on a single VPS using Docker Compose.
@@ -16,7 +33,7 @@ This repository is designed to run on a single VPS using Docker Compose.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/power-os/power-os.git
+git clone https://github.com/naimsolong/power-os.git
 cd power-os
 ```
 
@@ -26,7 +43,16 @@ cd power-os
 cp .env.example .env
 ```
 
-Review `.env` and change any defaults (especially `POSTGRES_PASSWORD` and `MINIO_ROOT_PASSWORD`) before running in production.
+Review `.env` and change any defaults before running in production. The most important variables are:
+
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` / `POSTGRES_PASSWORD` | PostgreSQL connection |
+| `MINIO_ROOT_PASSWORD` | Object storage admin password |
+| `COOKIE_SECURE` | Set to `true` when serving over HTTPS |
+| `PASSWORD_RESET_URL` | Public URL used in password-reset links and logs |
+| `OPENROUTER_API_KEY` | Required for the AI assistant |
+| `LHDN_*` | MyInvois OAuth credentials and TIN for e-Invoice |
 
 ### 3. Start the backend and services
 
@@ -109,7 +135,7 @@ You can also run them separately:
 
 | Service | Image | Purpose |
 |---------|-------|---------|
-| app | `Dockerfile` (Rust) | Axum backend API |
+| app | `Dockerfile` (Rust) | Axum backend API + static frontend |
 | db | `postgres:16-alpine` | Primary database |
 | minio | `quay.io/minio/minio` | Object storage for uploads (host ports 9002/9003) |
 | caddy | `caddy:2-alpine` | Reverse proxy |
@@ -146,9 +172,11 @@ cargo run -p power-os-api
 
 ### Project layout
 
-- `crates/api` — Axum HTTP server and routes.
+- `crates/api` — Axum HTTP server, routes, and AI/LHDN integrations.
 - `crates/migrations` — SQLx migrations and migration runner.
 - `crates/domain` — Shared domain types and identifiers.
+- `frontend` — React SPA.
+- `docs` — Roadmap and architecture notes.
 
 ## Frontend development
 
@@ -163,6 +191,9 @@ The dev server runs at http://localhost:5173.
 ## Production notes
 
 - Change all default passwords in `.env`.
+- Set `COOKIE_SECURE=true` and serve over HTTPS.
+- Configure `PASSWORD_RESET_URL` to the public `reset-password` route.
+- Configure `OPENROUTER_API_KEY` for the AI assistant, or disable the assistant if not needed.
 - Use a proper domain in `Caddyfile` and let Caddy provision TLS automatically.
 - Back up the `postgres-data` and `minio-data` Docker volumes regularly.
 - Build the smaller production image:

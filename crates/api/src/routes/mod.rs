@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Power OS Contributors
 
 use axum::{routing::get, routing::post, Router};
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::ai;
 use crate::auth;
@@ -33,5 +34,12 @@ pub fn router(state: AppState) -> Router {
             axum::routing::get(lhdn::handlers::get_lhdn_settings)
                 .patch(lhdn::handlers::update_lhdn_settings),
         )
+        .fallback_service(static_service())
         .with_state(state)
+}
+
+fn static_service() -> ServeDir<ServeFile> {
+    let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "frontend/dist".to_string());
+    let index_path = format!("{}/index.html", static_dir);
+    ServeDir::new(&static_dir).fallback(ServeFile::new(index_path))
 }

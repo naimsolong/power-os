@@ -19,6 +19,7 @@ import { DealsPage } from "@/pages/deals";
 import { InvoicesPage } from "@/pages/invoices";
 import { AiAssistantPage } from "@/pages/ai-assistant";
 import { EmployeesPage } from "@/pages/employees";
+import { LandingPage } from "@/pages/landing";
 import { SettingsPage } from "@/pages/settings";
 
 const queryClient = new QueryClient({
@@ -47,6 +48,10 @@ const router = createBrowserRouter([
     ),
     children: [
       {
+        index: true,
+        element: <LandingPage />,
+      },
+      {
         path: "login",
         element: <LoginPage />,
       },
@@ -64,7 +69,7 @@ const router = createBrowserRouter([
           {
             element: <Layout />,
             children: [
-              { index: true, element: <DashboardPage /> },
+              { path: "dashboard", element: <DashboardPage /> },
               { path: "contacts", element: <ContactsPage /> },
               { path: "companies", element: <CompaniesPage /> },
               { path: "deals", element: <DealsPage /> },
@@ -72,7 +77,8 @@ const router = createBrowserRouter([
               { path: "employees", element: <EmployeesPage /> },
               { path: "ai-assistant", element: <AiAssistantPage /> },
               { path: "settings", element: <SettingsPage /> },
-              { path: "*", element: <Navigate to="/" replace /> },
+              { index: true, element: <Navigate to="/dashboard" replace /> },
+              { path: "*", element: <Navigate to="/dashboard" replace /> },
             ],
           },
         ],

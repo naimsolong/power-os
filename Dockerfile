@@ -26,6 +26,15 @@ RUN mkdir -p crates/api/src crates/migrations/src crates/domain/src \
 
 CMD ["sh", "-c", "sqlx migrate run --source crates/migrations/migrations && cargo run --release -p power-os-api"]
 
+# Frontend builder
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json ./frontend/
+RUN cd frontend && npm install
+COPY frontend ./frontend
+RUN cd frontend && npm run build
+
 # Production builder
 FROM dev AS builder
 
@@ -39,7 +48,9 @@ RUN apt-get update \
     && apt-get install -y ca-certificates postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /app
 COPY --from=builder /app/target/release/power-os-api /usr/local/bin/power-os-api
+COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
 EXPOSE 3000
 

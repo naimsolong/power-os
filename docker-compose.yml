@@ -17,6 +17,14 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-poweros}
+      PASSWORD_RESET_URL: ${PASSWORD_RESET_URL:-http://localhost:5173/reset-password}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL}
+      LHDN_CLIENT_ID: ${LHDN_CLIENT_ID}
+      LHDN_CLIENT_SECRET: ${LHDN_CLIENT_SECRET}
+      LHDN_TIN: ${LHDN_TIN}
+      LHDN_SANDBOX: ${LHDN_SANDBOX:-true}
     volumes:
       - .:/app
       - cargo-target:/app/target
