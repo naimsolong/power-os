@@ -6,8 +6,12 @@ import {
   Handshake,
   FileText,
   Briefcase,
+  LogOut,
+  User,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
+import { Button } from "@/components/ui/button";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -48,13 +52,31 @@ export function Sidebar() {
 }
 
 export function Layout() {
+  const { user, logout } = useAuth();
+
   return (
     <div className="flex min-h-screen bg-background">
       <Sidebar />
       <main className="flex-1 flex flex-col min-w-0">
         <header className="h-16 border-b bg-card flex items-center justify-between px-8">
           <h1 className="text-xl font-semibold">Power OS</h1>
-          <div className="text-sm text-muted-foreground">v0.1.0</div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <User className="h-4 w-4" />
+              <span className="hidden sm:inline">
+                {user?.name ?? user?.email ?? "User"}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => logout()}
+              className="gap-2"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">Logout</span>
+            </Button>
+          </div>
         </header>
         <div className="flex-1 p-8 overflow-auto">
           <Outlet />
