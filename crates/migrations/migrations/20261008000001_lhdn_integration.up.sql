@@ -10,8 +10,8 @@ ALTER TABLE workspace
 
 UPDATE workspace
 SET lhdn_base_url = CASE
-    WHEN lhdn_sandbox THEN 'https://preprod-sdk.myinvois.hasil.gov.my'
-    ELSE 'https://sdk.myinvois.hasil.gov.my'
+    WHEN lhdn_sandbox THEN 'https://preprod-api.myinvois.hasil.gov.my'
+    ELSE 'https://api.myinvois.hasil.gov.my'
 END
 WHERE lhdn_base_url IS NULL;
 

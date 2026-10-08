@@ -28,6 +28,7 @@ pub struct UpdateLhdnSettingsRequest {
     pub lhdn_client_secret: Option<String>,
     pub lhdn_tin: Option<String>,
     pub lhdn_sandbox: Option<bool>,
+    pub lhdn_base_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,12 +84,13 @@ pub async fn update_lhdn_settings(
     Json(payload): Json<UpdateLhdnSettingsRequest>,
 ) -> Result<(StatusCode, Json<LhdnSettingsResponse>), ApiError> {
     let sandbox = payload.lhdn_sandbox.unwrap_or(true);
-    let base_url = if sandbox {
-        "https://preprod-sdk.myinvois.hasil.gov.my"
-    } else {
-        "https://sdk.myinvois.hasil.gov.my"
-    }
-    .to_string();
+    let base_url = payload.lhdn_base_url.unwrap_or_else(|| {
+        if sandbox {
+            "https://preprod-api.myinvois.hasil.gov.my".to_string()
+        } else {
+            "https://api.myinvois.hasil.gov.my".to_string()
+        }
+    });
 
     let row = query(
         r#"
@@ -149,9 +151,9 @@ pub async fn submit_lhdn_invoice(
         .ok()
         .unwrap_or_else(|| {
             if workspace_row.try_get::<bool, _>("lhdn_sandbox").unwrap_or(true) {
-                "https://preprod-sdk.myinvois.hasil.gov.my".to_string()
+                "https://preprod-api.myinvois.hasil.gov.my".to_string()
             } else {
-                "https://sdk.myinvois.hasil.gov.my".to_string()
+                "https://api.myinvois.hasil.gov.my".to_string()
             }
         });
 
@@ -196,11 +198,14 @@ pub async fn submit_lhdn_invoice(
     let ubl_json_string = ubl.to_string();
     let document_base64 = base64::engine::general_purpose::STANDARD.encode(ubl_json_string.as_bytes());
 
+    let wrapper = crate::lhdn::client::DocumentWrapper::new(
+        "JSON".to_string(),
+        document_base64,
+        invoice.invoice_number.clone(),
+    );
+
     let request_json = serde_json::to_value(SubmitPayload {
-        documents: vec![crate::lhdn::client::DocumentWrapper {
-            format: "JSON".to_string(),
-            document: document_base64.clone(),
-        }],
+        documents: vec![wrapper.clone()],
     })
     .unwrap_or(Value::Null);
 
@@ -221,10 +226,7 @@ pub async fn submit_lhdn_invoice(
         .submit_document(
             &settings,
             SubmitPayload {
-                documents: vec![crate::lhdn::client::DocumentWrapper {
-                    format: "JSON".to_string(),
-                    document: document_base64,
-                }],
+                documents: vec![wrapper],
             },
         )
         .await;
@@ -232,13 +234,31 @@ pub async fn submit_lhdn_invoice(
     match submission_result {
         Ok(response) => {
             let response_json = serde_json::to_value(&response).unwrap_or(Value::Null);
+
+            let (lhdn_uuid, status, error_message) = if let Some(doc) =
+                response.accepted_documents.first()
+            {
+                (Some(doc.uuid.clone()), "submitted".to_string(), None)
+            } else if let Some(rejected) = response.rejected_documents.first() {
+                (
+                    None,
+                    "error".to_string(),
+                    Some(format!(
+                        "Document rejected: {}",
+                        serde_json::to_string(&rejected.error).unwrap_or_default()
+                    )),
+                )
+            } else {
+                (None, "submitted".to_string(), None)
+            };
+
             let row = query(
                 r#"
                 INSERT INTO e_invoice_submission (
                     id, workspace_id, invoice_id, lhdn_uuid, lhdn_submission_uid,
-                    status, request_json, response_json, submitted_at
+                    status, request_json, response_json, error_message, submitted_at
                 )
-                VALUES ($1, $2, $3, $4, $5, 'submitted', $6, $7, now())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
                 RETURNING id, invoice_id, status, lhdn_uuid, lhdn_submission_uid,
                           error_message, response_json, submitted_at, polled_at
                 "#,
@@ -246,10 +266,12 @@ pub async fn submit_lhdn_invoice(
             .bind(Uuid::new_v4())
             .bind(auth_user.workspace_id.0)
             .bind(id.0)
-            .bind(response.uuid.as_deref())
+            .bind(lhdn_uuid)
             .bind(response.submission_uid.as_deref())
+            .bind(status)
             .bind(&request_json)
             .bind(&response_json)
+            .bind(error_message.as_deref())
             .fetch_one(&state.db)
             .await?;
 
@@ -319,13 +341,17 @@ pub async fn get_lhdn_status(
 
     let mut submission = map_submission_row(&row)?;
 
-    if let Some(uuid) = submission.lhdn_uuid.as_deref() {
+    if let Some(submission_uid) = submission.lhdn_submission_uid.as_deref() {
         if let Ok(settings) = load_lhdn_settings(&state.db, auth_user.workspace_id.0).await {
-            match state.lhdn.get_document_status(&settings, uuid).await {
+            match state
+                .lhdn
+                .get_document_status(&settings, submission_uid)
+                .await
+            {
                 Ok(DocumentStatusResponse {
-                    uuid: _,
-                    status: Some(status),
+                    overall_status: Some(status),
                     extra,
+                    ..
                 }) => {
                     let updated = query(
                         r#"
@@ -344,11 +370,17 @@ pub async fn get_lhdn_status(
                     .await?;
                     submission = map_submission_row(&updated)?;
                 }
-                Ok(DocumentStatusResponse { status: None, .. }) => {
+                Ok(DocumentStatusResponse {
+                    overall_status: None,
+                    ..
+                }) => {
                     // Status endpoint returned without a status field; keep cached record.
                 }
                 Err(err) => {
-                    error!("LHDN status poll failed for {}: {}", uuid, err);
+                    error!(
+                        "LHDN status poll failed for {}: {}",
+                        submission_uid, err
+                    );
                 }
             }
         }

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tracing::{error, info};
 
 const TOKEN_MARGIN: Duration = Duration::from_secs(60);
@@ -40,27 +41,72 @@ pub struct SubmitPayload {
     pub documents: Vec<DocumentWrapper>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Clone, Serialize, Debug)]
 pub struct DocumentWrapper {
     pub format: String,
     pub document: String,
+    #[serde(rename = "documentHash")]
+    pub document_hash: String,
+    #[serde(rename = "codeNumber")]
+    pub code_number: String,
+}
+
+impl DocumentWrapper {
+    pub fn new(format: String, document: String, code_number: String) -> Self {
+        let hash = format!("{:x}", Sha256::digest(document.as_bytes()));
+        Self {
+            format,
+            document,
+            document_hash: hash,
+            code_number,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SubmitResponse {
-    pub uuid: Option<String>,
+    #[serde(rename = "submissionUID")]
+    pub submission_uid: Option<String>,
+    #[serde(rename = "acceptedDocuments", default)]
+    pub accepted_documents: Vec<AcceptedDocument>,
+    #[serde(rename = "rejectedDocuments", default)]
+    pub rejected_documents: Vec<RejectedDocument>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AcceptedDocument {
+    pub uuid: String,
+    #[serde(rename = "invoiceCodeNumber")]
+    pub invoice_code_number: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RejectedDocument {
+    #[serde(rename = "invoiceCodeNumber")]
+    pub invoice_code_number: String,
+    pub error: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DocumentStatusResponse {
     #[serde(rename = "submissionUid")]
     pub submission_uid: Option<String>,
+    #[serde(rename = "overallStatus")]
+    pub overall_status: Option<String>,
+    #[serde(rename = "documentSummary", default)]
+    pub document_summary: Vec<DocumentSummary>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct DocumentStatusResponse {
-    pub uuid: Option<String>,
+pub struct DocumentSummary {
+    pub uuid: String,
     pub status: Option<String>,
-    #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
+    #[serde(rename = "longId")]
+    pub long_id: Option<String>,
+    #[serde(rename = "internalId")]
+    pub internal_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -177,7 +223,7 @@ impl LhdnClient {
     ) -> Result<SubmitResponse, LhdnError> {
         let token = self.access_token(settings).await?;
         let url = format!(
-            "{}/api/v1.0/documents/submit",
+            "{}/api/v1.0/documentsubmissions/",
             settings.base_url.trim_end_matches('/')
         );
 
@@ -204,11 +250,11 @@ impl LhdnClient {
     pub async fn get_document_status(
         &self,
         settings: &LhdnSettings,
-        uuid: &str,
+        submission_uid: &str,
     ) -> Result<DocumentStatusResponse, LhdnError> {
         let token = self.access_token(settings).await?;
         let url = format!(
-            "{}/api/v1.0/documents/status/{uuid}",
+            "{}/api/v1.0/documentsubmissions/{submission_uid}",
             settings.base_url.trim_end_matches('/')
         );
 
