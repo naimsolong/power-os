@@ -11,6 +11,7 @@ use tower_sessions_sqlx_store::PostgresStore;
 use tracing::info;
 
 mod auth;
+mod lhdn;
 mod routes;
 mod state;
 

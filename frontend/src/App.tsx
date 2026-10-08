@@ -16,6 +16,7 @@ import { CompaniesPage } from "@/pages/companies";
 import { DealsPage } from "@/pages/deals";
 import { InvoicesPage } from "@/pages/invoices";
 import { EmployeesPage } from "@/pages/employees";
+import { SettingsPage } from "@/pages/settings";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -58,6 +59,7 @@ const router = createBrowserRouter([
               { path: "deals", element: <DealsPage /> },
               { path: "invoices", element: <InvoicesPage /> },
               { path: "employees", element: <EmployeesPage /> },
+              { path: "settings", element: <SettingsPage /> },
               { path: "*", element: <Navigate to="/" replace /> },
             ],
           },

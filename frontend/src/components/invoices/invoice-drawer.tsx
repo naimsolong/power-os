@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
+import { Plus, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -22,6 +22,7 @@ import {
   type InvoiceCreate,
   type InvoiceLine,
   type InvoiceStatus,
+  type LhdnSubmission,
   type Party,
   INVOICE_STATUS_LABELS,
   INVOICE_STATUS_OPTIONS,
@@ -43,12 +44,15 @@ interface InvoiceDrawerProps {
   invoice?: Invoice | null;
   lines?: InvoiceLine[] | null;
   parties: Party[];
+  lhdnStatus?: LhdnSubmission | null;
   isLoading?: boolean;
   isSaving?: boolean;
+  isSubmittingLhdn?: boolean;
   error?: Error | null;
   onClose: () => void;
   onSave: (payload: { form: InvoiceCreate; lines: InvoiceLineForm[] }) => void;
   onDelete?: (id: string) => void;
+  onSubmitLhdn?: (id: string) => void;
 }
 
 const emptyForm: InvoiceCreate = {
@@ -124,12 +128,15 @@ export function InvoiceDrawer({
   invoice,
   lines,
   parties,
+  lhdnStatus,
   isLoading,
   isSaving,
+  isSubmittingLhdn,
   error,
   onClose,
   onSave,
   onDelete,
+  onSubmitLhdn,
 }: InvoiceDrawerProps) {
   const [form, setForm] = useState<InvoiceCreate>(() =>
     buildInitialForm(invoice)
@@ -487,6 +494,56 @@ export function InvoiceDrawer({
                       </Table>
                     </div>
                   </div>
+
+                  {invoiceId && invoice && (
+                    <div className="space-y-3 rounded-md border p-4">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium">
+                          LHDN MyInvois
+                        </label>
+                        {(invoice.status === "draft" ||
+                          invoice.status === "posted") &&
+                          onSubmitLhdn && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={isSubmittingLhdn}
+                              onClick={() => onSubmitLhdn(invoiceId)}
+                            >
+                              <Upload className="h-4 w-4" />
+                              {isSubmittingLhdn
+                                ? "Submitting..."
+                                : "Submit to LHDN"}
+                            </Button>
+                          )}
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        <p>
+                          Status:{" "}
+                          <span className="font-medium text-foreground capitalize">
+                            {lhdnStatus?.status ??
+                              invoice.lhdn_status ??
+                              "Not submitted"}
+                          </span>
+                        </p>
+                        {(lhdnStatus?.lhdn_uuid ?? invoice.lhdn_uuid) && (
+                          <p>
+                            UUID:{" "}
+                            <span className="font-medium text-foreground">
+                              {lhdnStatus?.lhdn_uuid ?? invoice.lhdn_uuid}
+                            </span>
+                          </p>
+                        )}
+                        {(lhdnStatus?.error_message ?? invoice.lhdn_error) && (
+                          <p className="text-destructive">
+                            Error:{" "}
+                            {lhdnStatus?.error_message ?? invoice.lhdn_error}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   <div className="flex justify-end">
                     <div className="text-right">

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, Search, Send } from "lucide-react";
+import { Plus, Search, Send, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -27,6 +27,8 @@ import {
   useDeleteInvoice,
   usePostInvoice,
   useInvoiceLines,
+  useSubmitLhdn,
+  useLhdnStatus,
 } from "@/hooks/use-invoices";
 import {
   INVOICE_STATUS_LABELS,
@@ -57,12 +59,15 @@ export function InvoicesPage() {
   const updateInvoice = useUpdateInvoice();
   const deleteInvoice = useDeleteInvoice();
   const postInvoice = usePostInvoice();
+  const submitLhdn = useSubmitLhdn();
+  const { data: selectedLhdnStatus } = useLhdnStatus(selectedInvoiceId);
 
   const mutationError =
     createInvoice.error ||
     updateInvoice.error ||
     deleteInvoice.error ||
-    postInvoice.error;
+    postInvoice.error ||
+    submitLhdn.error;
 
   const partyById = useMemo(() => {
     const map = new Map<string, string>();
@@ -145,6 +150,12 @@ export function InvoicesPage() {
     }
   };
 
+  const handleSubmitLhdn = (id: string) => {
+    if (confirm("Submit this invoice to LHDN MyInvois?")) {
+      submitLhdn.mutate(id);
+    }
+  };
+
   const formatCurrency = (value: number, currency: string) => {
     try {
       return new Intl.NumberFormat("en-US", {
@@ -201,6 +212,7 @@ export function InvoicesPage() {
               <TableHead>Client</TableHead>
               <TableHead>Amount</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>LHDN Status</TableHead>
               <TableHead>Due Date</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -209,7 +221,7 @@ export function InvoicesPage() {
             {isLoading ? (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={7}
                   className="h-24 text-center text-muted-foreground"
                 >
                   Loading...
@@ -218,7 +230,7 @@ export function InvoicesPage() {
             ) : error ? (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={7}
                   className="h-24 text-center text-destructive"
                 >
                   Failed to load invoices: {error.message}
@@ -227,7 +239,7 @@ export function InvoicesPage() {
             ) : !invoices || invoices.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={7}
                   className="h-24 text-center text-muted-foreground"
                 >
                   No invoices found.
@@ -255,6 +267,9 @@ export function InvoicesPage() {
                   <TableCell className="capitalize">
                     {INVOICE_STATUS_LABELS[invoice.status]}
                   </TableCell>
+                  <TableCell className="capitalize">
+                    {invoice.lhdn_status ?? "—"}
+                  </TableCell>
                   <TableCell>
                     {invoice.due_date
                       ? invoice.due_date.slice(0, 10)
@@ -276,6 +291,20 @@ export function InvoicesPage() {
                           Post
                         </Button>
                       )}
+                      {(invoice.status === "draft" || invoice.status === "posted") && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSubmitLhdn(invoice.id);
+                          }}
+                        >
+                          <Upload className="h-4 w-4" />
+                          Submit LHDN
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -291,16 +320,19 @@ export function InvoicesPage() {
         invoice={selectedInvoice}
         lines={selectedLines}
         parties={parties ?? []}
+        lhdnStatus={selectedLhdnStatus}
         isLoading={!!selectedInvoiceId && (isLoadingInvoice || isLoadingLines)}
         isSaving={
           createInvoice.isPending ||
           updateInvoice.isPending ||
           deleteInvoice.isPending
         }
+        isSubmittingLhdn={submitLhdn.isPending}
         error={mutationError}
         onClose={handleCloseDrawer}
         onSave={handleSave}
         onDelete={handleDelete}
+        onSubmitLhdn={handleSubmitLhdn}
       />
     </div>
   );

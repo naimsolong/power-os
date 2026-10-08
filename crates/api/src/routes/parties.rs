@@ -41,6 +41,7 @@ pub struct CreatePartyRequest {
     pub email: Option<String>,
     pub phone: Option<String>,
     pub address: Option<String>,
+    pub tin: Option<String>,
     pub party_type: PartyType,
 }
 
@@ -51,6 +52,7 @@ pub struct UpdatePartyRequest {
     pub email: Option<String>,
     pub phone: Option<String>,
     pub address: Option<String>,
+    pub tin: Option<String>,
     pub party_type: Option<PartyType>,
 }
 
@@ -67,6 +69,7 @@ pub struct PartyResponse {
     pub email: Option<String>,
     pub phone: Option<String>,
     pub address: Option<String>,
+    pub tin: Option<String>,
     pub party_type: String,
 }
 
@@ -78,6 +81,7 @@ fn map_party_row(row: &sqlx::postgres::PgRow) -> Result<PartyResponse, sqlx::Err
         email: row.try_get("email")?,
         phone: row.try_get("phone")?,
         address: row.try_get("address")?,
+        tin: row.try_get("tin")?,
         party_type: row.try_get("party_type")?,
     })
 }
@@ -97,7 +101,7 @@ pub async fn list_parties(
 
     let rows = query(
         r#"
-        SELECT id, workspace_id, name, email, phone, address, party_type
+        SELECT id, workspace_id, name, email, phone, address, tin, party_type
         FROM party
         WHERE workspace_id = $1
           AND ($2::text IS NULL OR party_type = $2)
@@ -129,9 +133,9 @@ pub async fn create_party(
 
     let row = query(
         r#"
-        INSERT INTO party (id, workspace_id, name, email, phone, address, party_type)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, workspace_id, name, email, phone, address, party_type
+        INSERT INTO party (id, workspace_id, name, email, phone, address, tin, party_type)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, workspace_id, name, email, phone, address, tin, party_type
         "#,
     )
     .bind(party_id.0)
@@ -140,6 +144,7 @@ pub async fn create_party(
     .bind(&payload.email)
     .bind(&payload.phone)
     .bind(&payload.address)
+    .bind(&payload.tin)
     .bind(party_type)
     .fetch_one(&state.db)
     .await?;
@@ -154,7 +159,7 @@ pub async fn get_party(
 ) -> Result<(StatusCode, Json<PartyResponse>), ApiError> {
     let row = query(
         r#"
-        SELECT id, workspace_id, name, email, phone, address, party_type
+        SELECT id, workspace_id, name, email, phone, address, tin, party_type
         FROM party
         WHERE id = $1 AND workspace_id = $2
         "#,
@@ -192,6 +197,7 @@ pub async fn update_party(
     let email = payload.email.as_deref();
     let phone = payload.phone.as_deref();
     let address = payload.address.as_deref();
+    let tin = payload.tin.as_deref();
     let party_type = payload.party_type.as_ref().map(|pt| pt.as_str());
 
     let row = query(
@@ -202,10 +208,11 @@ pub async fn update_party(
             email = COALESCE($4, email),
             phone = COALESCE($5, phone),
             address = COALESCE($6, address),
-            party_type = COALESCE($7, party_type),
+            tin = COALESCE($7, tin),
+            party_type = COALESCE($8, party_type),
             updated_at = now()
         WHERE id = $1 AND workspace_id = $2
-        RETURNING id, workspace_id, name, email, phone, address, party_type
+        RETURNING id, workspace_id, name, email, phone, address, tin, party_type
         "#,
     )
     .bind(id.0)
@@ -214,6 +221,7 @@ pub async fn update_party(
     .bind(email)
     .bind(phone)
     .bind(address)
+    .bind(tin)
     .bind(party_type)
     .fetch_one(&state.db)
     .await?;

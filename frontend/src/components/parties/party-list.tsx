@@ -74,7 +74,8 @@ export function PartyList({
         party.name.toLowerCase().includes(term) ||
         (party.email ?? "").toLowerCase().includes(term) ||
         (party.phone ?? "").toLowerCase().includes(term) ||
-        (party.address ?? "").toLowerCase().includes(term)
+        (party.address ?? "").toLowerCase().includes(term) ||
+        (party.tin ?? "").toLowerCase().includes(term)
     );
   }, [parties, search]);
 
@@ -170,6 +171,7 @@ export function PartyList({
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
+              <TableHead>TIN</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Phone</TableHead>
               <TableHead>Address</TableHead>
@@ -180,7 +182,7 @@ export function PartyList({
             {isLoading ? (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="h-24 text-center text-muted-foreground"
                 >
                   Loading...
@@ -189,7 +191,7 @@ export function PartyList({
             ) : error ? (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="h-24 text-center text-destructive"
                 >
                   Failed to load parties: {error.message}
@@ -198,7 +200,7 @@ export function PartyList({
             ) : filteredParties.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="h-24 text-center text-muted-foreground"
                 >
                   No parties found.
@@ -212,6 +214,7 @@ export function PartyList({
                   onClick={() => handleEdit(party.id)}
                 >
                   <TableCell className="font-medium">{party.name}</TableCell>
+                  <TableCell>{party.tin ?? "—"}</TableCell>
                   <TableCell>{party.email ?? "—"}</TableCell>
                   <TableCell>{party.phone ?? "—"}</TableCell>
                   <TableCell>{party.address ?? "—"}</TableCell>

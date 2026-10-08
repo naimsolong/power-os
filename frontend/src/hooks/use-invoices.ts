@@ -11,6 +11,7 @@ import {
   type InvoiceLine,
   type InvoiceLineCreate,
   type InvoiceLineUpdate,
+  type LhdnSubmission,
   fetchInvoices,
   fetchInvoice,
   createInvoice,
@@ -21,11 +22,14 @@ import {
   createInvoiceLine,
   updateInvoiceLine,
   deleteInvoiceLine,
+  submitInvoiceToLhdn,
+  fetchInvoiceLhdnStatus,
 } from "@/lib/api";
 
 const INVOICES_KEY = "invoices";
 const INVOICE_KEY = "invoice";
 const INVOICE_LINES_KEY = "invoice-lines";
+const LHDN_STATUS_KEY = "lhdn-status";
 
 export function useInvoices(
   search?: string,
@@ -147,5 +151,25 @@ export function useDeleteInvoiceLine() {
       });
       queryClient.invalidateQueries({ queryKey: [INVOICES_KEY] });
     },
+  });
+}
+
+export function useSubmitLhdn() {
+  const queryClient = useQueryClient();
+  return useMutation<LhdnSubmission, Error, string>({
+    mutationFn: submitInvoiceToLhdn,
+    onSuccess: (_, id) => {
+      queryClient.invalidateQueries({ queryKey: [INVOICES_KEY] });
+      queryClient.invalidateQueries({ queryKey: [INVOICE_KEY, id] });
+      queryClient.invalidateQueries({ queryKey: [LHDN_STATUS_KEY, id] });
+    },
+  });
+}
+
+export function useLhdnStatus(id: string | null) {
+  return useQuery<LhdnSubmission>({
+    queryKey: [LHDN_STATUS_KEY, id],
+    queryFn: () => fetchInvoiceLhdnStatus(id as string),
+    enabled: !!id,
   });
 }

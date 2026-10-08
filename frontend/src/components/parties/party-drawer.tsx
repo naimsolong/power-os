@@ -37,6 +37,7 @@ const emptyForm: PartyCreate = {
   email: "",
   phone: "",
   address: "",
+  tin: "",
   party_type: "customer",
 };
 
@@ -50,6 +51,7 @@ function buildInitialForm(
       email: party.email ?? "",
       phone: party.phone ?? "",
       address: party.address ?? "",
+      tin: party.tin ?? "",
       party_type: party.party_type,
     };
   }
@@ -207,6 +209,23 @@ export function PartyDrawer({
                         }))
                       }
                       placeholder="Address"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label
+                      htmlFor="party-tin"
+                      className="text-sm font-medium"
+                    >
+                      TIN (LHDN)
+                    </label>
+                    <Input
+                      id="party-tin"
+                      value={form.tin}
+                      onChange={(e) =>
+                        setForm((prev) => ({ ...prev, tin: e.target.value }))
+                      }
+                      placeholder="e.g. C1234567890"
                     />
                   </div>
 

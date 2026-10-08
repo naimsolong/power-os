@@ -20,6 +20,7 @@ export interface Party {
   email: string | null;
   phone: string | null;
   address: string | null;
+  tin: string | null;
   party_type: PartyType;
 }
 
@@ -28,6 +29,7 @@ export interface PartyCreate {
   email?: string;
   phone?: string;
   address?: string;
+  tin?: string;
   party_type: PartyType;
 }
 
@@ -140,13 +142,14 @@ export const PARTY_TYPE_LABELS: Record<PartyType, string> = {
 
 export const PARTY_TYPE_OPTIONS: PartyType[] = ["customer", "vendor", "other"];
 
-export type InvoiceStatus = "draft" | "sent" | "paid" | "overdue";
+export type InvoiceStatus = "draft" | "sent" | "paid" | "overdue" | "posted";
 
 export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
   draft: "Draft",
   sent: "Sent",
   paid: "Paid",
   overdue: "Overdue",
+  posted: "Posted",
 };
 
 export const INVOICE_STATUS_OPTIONS: InvoiceStatus[] = [
@@ -154,6 +157,7 @@ export const INVOICE_STATUS_OPTIONS: InvoiceStatus[] = [
   "sent",
   "paid",
   "overdue",
+  "posted",
 ];
 
 export interface InvoiceLine {
@@ -174,6 +178,9 @@ export interface Invoice {
   status: InvoiceStatus;
   total_amount: number;
   currency: string;
+  lhdn_status: string | null;
+  lhdn_uuid: string | null;
+  lhdn_error: string | null;
 }
 
 export interface InvoiceCreate {
@@ -326,4 +333,74 @@ export async function deleteInvoiceLine(
     const text = await response.text().catch(() => "Unknown error");
     throw new Error(`HTTP ${response.status}: ${text}`);
   }
+}
+
+export interface LhdnSettings {
+  lhdn_client_id: string;
+  lhdn_client_secret: string;
+  lhdn_tin: string;
+  lhdn_sandbox: boolean;
+}
+
+export interface LhdnSettingsResponse {
+  lhdn_client_id: string | null;
+  lhdn_tin: string | null;
+  lhdn_sandbox: boolean;
+  lhdn_base_url: string;
+}
+
+export interface LhdnSubmission {
+  id: string;
+  invoice_id: string;
+  status: string | null;
+  lhdn_uuid: string | null;
+  lhdn_submission_uid: string | null;
+  error_message: string | null;
+  response_json: unknown;
+  submitted_at: string | null;
+  polled_at: string | null;
+}
+
+export async function fetchLhdnSettings(): Promise<LhdnSettingsResponse> {
+  const response = await fetch(`${API_BASE}/workspace/lhdn-settings`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  return handleResponse<LhdnSettingsResponse>(response);
+}
+
+export async function updateLhdnSettings(
+  settings: LhdnSettings
+): Promise<LhdnSettingsResponse> {
+  const response = await fetch(`${API_BASE}/workspace/lhdn-settings`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(settings),
+  });
+  return handleResponse<LhdnSettingsResponse>(response);
+}
+
+export async function submitInvoiceToLhdn(id: string): Promise<LhdnSubmission> {
+  const response = await fetch(`${API_BASE}/invoices/${id}/submit-lhdn`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  return handleResponse<LhdnSubmission>(response);
+}
+
+export async function fetchInvoiceLhdnStatus(
+  id: string
+): Promise<LhdnSubmission> {
+  const response = await fetch(`${API_BASE}/invoices/${id}/lhdn-status`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  return handleResponse<LhdnSubmission>(response);
 }

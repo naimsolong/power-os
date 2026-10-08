@@ -6,6 +6,7 @@ import {
   Handshake,
   FileText,
   Briefcase,
+  Settings,
   LogOut,
   User,
 } from "lucide-react";
@@ -20,6 +21,7 @@ const navItems = [
   { to: "/deals", label: "Deals", icon: Handshake },
   { to: "/invoices", label: "Invoices", icon: FileText },
   { to: "/employees", label: "Employees", icon: Briefcase },
+  { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {

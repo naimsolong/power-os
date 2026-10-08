@@ -4,13 +4,14 @@
 use axum::{routing::get, Router};
 
 use crate::auth;
+use crate::lhdn;
 use crate::state::AppState;
 
 mod deal_stages;
 mod deals;
-mod error;
+pub(crate) mod error;
 mod health;
-mod invoices;
+pub(crate) mod invoices;
 mod journal_entries;
 mod parties;
 
@@ -23,5 +24,10 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/deals", deals::router())
         .nest("/api/invoices", invoices::router())
         .nest("/api/journal-entries", journal_entries::router())
+        .route(
+            "/api/workspace/lhdn-settings",
+            axum::routing::get(lhdn::handlers::get_lhdn_settings)
+                .patch(lhdn::handlers::update_lhdn_settings),
+        )
         .with_state(state)
 }

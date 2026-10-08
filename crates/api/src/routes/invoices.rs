@@ -15,6 +15,7 @@ use time::Date;
 use validator::Validate;
 
 use crate::auth::AuthUser;
+use crate::lhdn;
 use crate::routes::error::ApiError;
 use crate::state::AppState;
 
@@ -80,6 +81,9 @@ pub struct InvoiceResponse {
     pub status: String,
     pub total_amount: BigDecimal,
     pub currency: String,
+    pub lhdn_status: Option<String>,
+    pub lhdn_uuid: Option<String>,
+    pub lhdn_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -145,6 +149,9 @@ fn map_invoice_row(row: &sqlx::postgres::PgRow) -> Result<InvoiceResponse, sqlx:
         status: row.try_get("status")?,
         total_amount: row.try_get("total_amount")?,
         currency: row.try_get("currency")?,
+        lhdn_status: row.try_get("lhdn_status")?,
+        lhdn_uuid: row.try_get("lhdn_uuid")?,
+        lhdn_error: row.try_get("lhdn_error")?,
     })
 }
 
@@ -166,6 +173,8 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/lines", get(list_invoice_lines).post(create_invoice_line))
         .route("/{id}/lines/{line_id}", patch(update_invoice_line).delete(delete_invoice_line))
         .route("/{id}/post", post(post_invoice))
+        .route("/{id}/submit-lhdn", post(lhdn::handlers::submit_lhdn_invoice))
+        .route("/{id}/lhdn-status", get(lhdn::handlers::get_lhdn_status))
 }
 
 async fn ensure_party_in_workspace(
@@ -192,9 +201,21 @@ async fn fetch_invoice(
 ) -> Result<Option<InvoiceResponse>, ApiError> {
     let row = query(
         r#"
-        SELECT id, workspace_id, party_id, invoice_number, issue_date, due_date, status, total_amount, currency
-        FROM invoice
-        WHERE id = $1 AND workspace_id = $2
+        SELECT
+            i.id, i.workspace_id, i.party_id, i.invoice_number, i.issue_date,
+            i.due_date, i.status, i.total_amount, i.currency,
+            s.status AS lhdn_status,
+            s.lhdn_uuid,
+            s.error_message AS lhdn_error
+        FROM invoice i
+        LEFT JOIN LATERAL (
+            SELECT status, lhdn_uuid, error_message
+            FROM e_invoice_submission
+            WHERE workspace_id = i.workspace_id AND invoice_id = i.id
+            ORDER BY submitted_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+        ) s ON true
+        WHERE i.id = $1 AND i.workspace_id = $2
         "#,
     )
     .bind(invoice_id.0)
@@ -230,7 +251,7 @@ async fn fetch_invoice_lines(
         .map_err(ApiError::from)
 }
 
-async fn fetch_invoice_detail(
+pub(crate) async fn fetch_invoice_detail(
     db: &sqlx::PgPool,
     invoice_id: InvoiceId,
     workspace_id: WorkspaceId,
@@ -265,12 +286,24 @@ pub async fn list_invoices(
 
     let rows = query(
         r#"
-        SELECT id, workspace_id, party_id, invoice_number, issue_date, due_date, status, total_amount, currency
-        FROM invoice
-        WHERE workspace_id = $1
-          AND ($2::uuid IS NULL OR party_id = $2)
-          AND ($3::text IS NULL OR status = $3)
-        ORDER BY issue_date DESC, invoice_number
+        SELECT
+            i.id, i.workspace_id, i.party_id, i.invoice_number, i.issue_date,
+            i.due_date, i.status, i.total_amount, i.currency,
+            s.status AS lhdn_status,
+            s.lhdn_uuid,
+            s.error_message AS lhdn_error
+        FROM invoice i
+        LEFT JOIN LATERAL (
+            SELECT status, lhdn_uuid, error_message
+            FROM e_invoice_submission
+            WHERE workspace_id = i.workspace_id AND invoice_id = i.id
+            ORDER BY submitted_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+        ) s ON true
+        WHERE i.workspace_id = $1
+          AND ($2::uuid IS NULL OR i.party_id = $2)
+          AND ($3::text IS NULL OR i.status = $3)
+        ORDER BY i.issue_date DESC, i.invoice_number
         "#,
     )
     .bind(auth_user.workspace_id.0)
@@ -303,7 +336,8 @@ pub async fn create_invoice(
         r#"
         INSERT INTO invoice (id, workspace_id, party_id, invoice_number, issue_date, due_date, status, total_amount, currency)
         VALUES ($1, $2, $3, $4, $5, $6, 'draft', 0, $7)
-        RETURNING id, workspace_id, party_id, invoice_number, issue_date, due_date, status, total_amount, currency
+        RETURNING id, workspace_id, party_id, invoice_number, issue_date, due_date, status, total_amount, currency,
+                  NULL::text AS lhdn_status, NULL::text AS lhdn_uuid, NULL::text AS lhdn_error
         "#,
     )
     .bind(invoice_id.0)
