@@ -1,10 +1,15 @@
+import { type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createBrowserRouter,
   Navigate,
+  Outlet,
   RouterProvider,
 } from "react-router-dom";
+import { AuthProvider } from "@/contexts/auth-provider";
+import { ProtectedRoute } from "@/components/protected-route";
 import { Layout } from "@/components/layout";
+import { LoginPage } from "@/pages/login";
 import { DashboardPage } from "@/pages/dashboard";
 import { ContactsPage } from "@/pages/contacts";
 import { CompaniesPage } from "@/pages/companies";
@@ -20,18 +25,44 @@ const queryClient = new QueryClient({
   },
 });
 
+function Root({ children }: { children: ReactNode }) {
+  return (
+    <AuthProvider>
+      {children}
+    </AuthProvider>
+  );
+}
+
 const router = createBrowserRouter([
   {
     path: "/",
-    element: <Layout />,
+    element: (
+      <Root>
+        <Outlet />
+      </Root>
+    ),
     children: [
-      { index: true, element: <DashboardPage /> },
-      { path: "contacts", element: <ContactsPage /> },
-      { path: "companies", element: <CompaniesPage /> },
-      { path: "deals", element: <DealsPage /> },
-      { path: "invoices", element: <InvoicesPage /> },
-      { path: "employees", element: <EmployeesPage /> },
-      { path: "*", element: <Navigate to="/" replace /> },
+      {
+        path: "login",
+        element: <LoginPage />,
+      },
+      {
+        element: <ProtectedRoute />,
+        children: [
+          {
+            element: <Layout />,
+            children: [
+              { index: true, element: <DashboardPage /> },
+              { path: "contacts", element: <ContactsPage /> },
+              { path: "companies", element: <CompaniesPage /> },
+              { path: "deals", element: <DealsPage /> },
+              { path: "invoices", element: <InvoicesPage /> },
+              { path: "employees", element: <EmployeesPage /> },
+              { path: "*", element: <Navigate to="/" replace /> },
+            ],
+          },
+        ],
+      },
     ],
   },
 ]);
