@@ -12,8 +12,8 @@ argon2 = "0.5"
 axum = "0.8"
 power-os-domain = { path = "../domain" }
 serde = { version = "1", features = ["derive"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "tls-native-tls", "uuid"] }
-time = "0.3"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "tls-native-tls", "uuid", "time"] }
+time = { version = "0.3", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 tower-sessions = "0.14"
 tower-sessions-sqlx-store = { version = "0.15", features = ["postgres"] }
