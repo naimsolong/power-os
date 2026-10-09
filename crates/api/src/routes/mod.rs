@@ -23,6 +23,7 @@ mod journal_entries;
 mod parties;
 pub(crate) mod payments;
 pub(crate) mod tax_codes;
+pub(crate) mod tax_reports;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -39,6 +40,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/journal-entries", journal_entries::router())
         .nest("/api/payments", payments::router())
         .nest("/api/tax-codes", tax_codes::router())
+        .nest("/api/tax-reports", tax_reports::router())
         .nest("/api/fiscal-years", fiscal_periods::router())
         .nest("/api/accounting-periods", fiscal_periods::accounting_periods_router())
         .route("/api/ai/chat", post(ai::handlers::chat))

@@ -9,7 +9,8 @@ use axum::{
 };
 use bigdecimal::{BigDecimal, One, Zero};
 use power_os_domain::{
-    AccountId, InvoiceId, InvoiceLineId, JournalEntryId, JournalLineId, PartyId, WorkspaceId,
+    AccountId, InvoiceId, InvoiceLineId, JournalEntryId, JournalLineId, PartyId, TaxCodeId,
+    WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{query, Row};
@@ -140,6 +141,7 @@ pub struct CreateInvoiceLineRequest {
     pub description: String,
     pub quantity: BigDecimal,
     pub unit_price: BigDecimal,
+    pub tax_code_id: Option<TaxCodeId>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -148,6 +150,7 @@ pub struct UpdateInvoiceLineRequest {
     pub description: Option<String>,
     pub quantity: Option<BigDecimal>,
     pub unit_price: Option<BigDecimal>,
+    pub tax_code_id: Option<Option<TaxCodeId>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,6 +161,8 @@ pub struct InvoiceLineResponse {
     pub quantity: BigDecimal,
     pub unit_price: BigDecimal,
     pub line_total: BigDecimal,
+    pub tax_code_id: Option<TaxCodeId>,
+    pub tax_amount: BigDecimal,
     pub foreign_unit_price: BigDecimal,
     pub foreign_amount: BigDecimal,
 }
@@ -200,6 +205,8 @@ fn map_invoice_line_row(row: &sqlx::postgres::PgRow) -> Result<InvoiceLineRespon
         quantity: row.try_get("quantity")?,
         unit_price: row.try_get("unit_price")?,
         line_total: row.try_get("line_total")?,
+        tax_code_id: row.try_get("tax_code_id")?,
+        tax_amount: row.try_get("tax_amount")?,
         foreign_unit_price: row.try_get("foreign_unit_price")?,
         foreign_amount: row.try_get("foreign_amount")?,
     })
@@ -291,7 +298,7 @@ async fn fetch_invoice_lines(
     let rows = query(
         r#"
         SELECT id, invoice_id, description, quantity, unit_price, line_total,
-               foreign_unit_price, foreign_amount
+               tax_code_id, tax_amount, foreign_unit_price, foreign_amount
         FROM invoice_line
         WHERE invoice_id = $1
         ORDER BY created_at ASC
@@ -540,6 +547,40 @@ pub async fn list_invoice_lines(
     Ok((StatusCode::OK, Json(lines)))
 }
 
+async fn resolve_tax_amount(
+    db: &sqlx::PgPool,
+    workspace_id: WorkspaceId,
+    tax_code_id: Option<TaxCodeId>,
+    taxable_amount: &BigDecimal,
+) -> Result<BigDecimal, ApiError> {
+    let Some(tax_code_id) = tax_code_id else {
+        return Ok(BigDecimal::zero());
+    };
+
+    let row = query(
+        r#"
+        SELECT rate
+        FROM tax_code
+        WHERE id = $1 AND workspace_id = $2 AND is_active = true
+        "#,
+    )
+    .bind(tax_code_id.0)
+    .bind(workspace_id.0)
+    .fetch_optional(db)
+    .await?;
+
+    let rate: BigDecimal = match row {
+        Some(row) => row.try_get("rate")?,
+        None => {
+            return Err(ApiError::BadRequest(
+                "Tax code not found in workspace".to_string(),
+            ))
+        }
+    };
+
+    Ok(taxable_amount * &rate)
+}
+
 pub async fn create_invoice_line(
     State(state): State<AppState>,
     Path(id): Path<InvoiceId>,
@@ -559,17 +600,24 @@ pub async fn create_invoice_line(
     let foreign_amount = &payload.quantity * foreign_unit_price;
     let myr_unit_price = foreign_unit_price * &invoice.exchange_rate;
     let myr_line_total = &foreign_amount * &invoice.exchange_rate;
+    let tax_amount = resolve_tax_amount(
+        &state.db,
+        auth_user.workspace_id,
+        payload.tax_code_id,
+        &myr_line_total,
+    )
+    .await?;
     let line_id = InvoiceLineId::new();
 
     let row = query(
         r#"
         INSERT INTO invoice_line (
             id, invoice_id, description, quantity, unit_price, line_total,
-            foreign_unit_price, foreign_amount
+            tax_code_id, tax_amount, foreign_unit_price, foreign_amount
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING id, invoice_id, description, quantity, unit_price, line_total,
-                 foreign_unit_price, foreign_amount
+                 tax_code_id, tax_amount, foreign_unit_price, foreign_amount
         "#,
     )
     .bind(line_id.0)
@@ -578,6 +626,8 @@ pub async fn create_invoice_line(
     .bind(&payload.quantity)
     .bind(&myr_unit_price)
     .bind(&myr_line_total)
+    .bind(payload.tax_code_id.map(|t| t.0))
+    .bind(&tax_amount)
     .bind(&foreign_unit_price)
     .bind(&foreign_amount)
     .fetch_one(&state.db)
@@ -601,26 +651,35 @@ pub async fn update_invoice_line(
     };
 
     let existing =
-        query("SELECT quantity, foreign_unit_price FROM invoice_line WHERE id = $1 AND invoice_id = $2")
+        query("SELECT quantity, foreign_unit_price, tax_code_id FROM invoice_line WHERE id = $1 AND invoice_id = $2")
             .bind(line_id.0)
             .bind(id.0)
             .fetch_optional(&state.db)
             .await?;
 
-    let (quantity, foreign_unit_price) = match existing {
+    let (quantity, foreign_unit_price, existing_tax_code_id) = match existing {
         Some(row) => {
             let q: BigDecimal = row.try_get("quantity")?;
             let p: BigDecimal = row.try_get("foreign_unit_price")?;
-            (q, p)
+            let t: Option<uuid::Uuid> = row.try_get("tax_code_id")?;
+            (q, p, t.map(TaxCodeId))
         }
         None => return Err(ApiError::NotFound),
     };
 
     let quantity = payload.quantity.as_ref().unwrap_or(&quantity);
     let foreign_unit_price = payload.unit_price.as_ref().unwrap_or(&foreign_unit_price);
+    let tax_code_id = payload.tax_code_id.unwrap_or(existing_tax_code_id);
     let foreign_amount = quantity * foreign_unit_price;
     let myr_unit_price = foreign_unit_price * &invoice.exchange_rate;
     let myr_line_total = &foreign_amount * &invoice.exchange_rate;
+    let tax_amount = resolve_tax_amount(
+        &state.db,
+        auth_user.workspace_id,
+        tax_code_id,
+        &myr_line_total,
+    )
+    .await?;
 
     let row = query(
         r#"
@@ -630,12 +689,14 @@ pub async fn update_invoice_line(
             quantity = COALESCE($4, quantity),
             unit_price = $5,
             line_total = $6,
-            foreign_unit_price = COALESCE($7, foreign_unit_price),
-            foreign_amount = $8,
+            tax_code_id = $7,
+            tax_amount = $8,
+            foreign_unit_price = COALESCE($9, foreign_unit_price),
+            foreign_amount = $10,
             updated_at = now()
         WHERE id = $1 AND invoice_id = $2
         RETURNING id, invoice_id, description, quantity, unit_price, line_total,
-                 foreign_unit_price, foreign_amount
+                 tax_code_id, tax_amount, foreign_unit_price, foreign_amount
         "#,
     )
     .bind(line_id.0)
@@ -644,6 +705,8 @@ pub async fn update_invoice_line(
     .bind(payload.quantity.as_ref())
     .bind(&myr_unit_price)
     .bind(&myr_line_total)
+    .bind(tax_code_id.map(|t| t.0))
+    .bind(&tax_amount)
     .bind(payload.unit_price.as_ref())
     .bind(&foreign_amount)
     .fetch_one(&state.db)
@@ -760,11 +823,26 @@ pub async fn post_invoice(
         .map(|line| &line.line_total)
         .fold(BigDecimal::zero(), |acc, x| acc + x);
 
+    let tax_total: BigDecimal = invoice
+        .lines
+        .iter()
+        .map(|line| &line.tax_amount)
+        .fold(BigDecimal::zero(), |acc, x| acc + x);
+
+    let total_with_tax = &total + &tax_total;
+
     let foreign_total: BigDecimal = invoice
         .lines
         .iter()
         .map(|line| &line.foreign_amount)
         .fold(BigDecimal::zero(), |acc, x| acc + x);
+
+    let foreign_tax_total = if invoice.exchange_rate == BigDecimal::one() {
+        tax_total.clone()
+    } else {
+        &tax_total / &invoice.exchange_rate
+    };
+    let foreign_total_with_tax = &foreign_total + &foreign_tax_total;
 
     if total <= BigDecimal::zero() {
         return Err(ApiError::BadRequest(
@@ -808,6 +886,30 @@ pub async fn post_invoice(
         }
     };
 
+    let sst_account_id: Option<AccountId> = if tax_total > BigDecimal::zero() {
+        let row = query(
+            "SELECT id FROM account WHERE workspace_id = $1 AND code = $2"
+        )
+        .bind(auth_user.workspace_id.0)
+        .bind("2205")
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        match row {
+            Some(row) => {
+                let id: uuid::Uuid = row.try_get("id")?;
+                Some(AccountId::from(id))
+            }
+            None => {
+                return Err(ApiError::BadRequest(
+                    "SST output tax account (code 2205) not found".to_string(),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
     query(
         r#"
         UPDATE invoice
@@ -817,7 +919,7 @@ pub async fn post_invoice(
     )
     .bind(id.0)
     .bind(auth_user.workspace_id.0)
-    .bind(&total)
+    .bind(&total_with_tax)
     .execute(&mut *tx)
     .await?;
 
@@ -850,8 +952,8 @@ pub async fn post_invoice(
     .bind(receivable_account_id.0)
     .bind(invoice.party_id.0)
     .bind(format!("Accounts Receivable - Invoice {}", invoice.invoice_number))
-    .bind(&total)
-    .bind(&foreign_total)
+    .bind(&total_with_tax)
+    .bind(&foreign_total_with_tax)
     .bind(&invoice.exchange_rate)
     .execute(&mut *tx)
     .await?;
@@ -875,6 +977,28 @@ pub async fn post_invoice(
     .bind(&invoice.exchange_rate)
     .execute(&mut *tx)
     .await?;
+
+    if let Some(sst_account_id) = sst_account_id {
+        query(
+            r#"
+            INSERT INTO journal_line (
+                id, journal_entry_id, account_id, party_id, description,
+                debit, credit, foreign_debit, foreign_credit, exchange_rate
+            )
+            VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8)
+            "#,
+        )
+        .bind(JournalLineId::new().0)
+        .bind(journal_entry_id.0)
+        .bind(sst_account_id.0)
+        .bind(invoice.party_id.0)
+        .bind(format!("SST Output Tax - Invoice {}", invoice.invoice_number))
+        .bind(&tax_total)
+        .bind(&foreign_tax_total)
+        .bind(&invoice.exchange_rate)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     tx.commit().await?;
 

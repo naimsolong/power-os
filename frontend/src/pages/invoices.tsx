@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/card";
 import { InvoiceDrawer } from "@/components/invoices/invoice-drawer";
 import { useParties } from "@/hooks/use-parties";
+import { useTaxCodes } from "@/hooks/use-tax-codes";
 import {
   useInvoices,
   useInvoice,
@@ -54,6 +55,7 @@ export function InvoicesPage() {
     selectedInvoiceId
   );
   const { data: parties } = useParties("customer");
+  const { data: taxCodes } = useTaxCodes();
 
   const createInvoice = useCreateInvoice();
   const updateInvoice = useUpdateInvoice();
@@ -104,6 +106,7 @@ export function InvoicesPage() {
       quantity: line.quantity,
       unit_price: line.unit_price,
       line_total: line.line_total,
+      tax_code_id: line.tax_code_id,
     }));
     await Promise.all(
       payload.map((line) => createInvoiceLine(invoiceId, line))
@@ -320,6 +323,7 @@ export function InvoicesPage() {
         invoice={selectedInvoice}
         lines={selectedLines}
         parties={parties ?? []}
+        taxCodes={taxCodes ?? []}
         lhdnStatus={selectedLhdnStatus}
         isLoading={!!selectedInvoiceId && (isLoadingInvoice || isLoadingLines)}
         isSaving={

@@ -26,6 +26,13 @@ import {
   fetchInvoiceLhdnStatus,
 } from "@/lib/api";
 
+export type InvoiceWithCurrency = Invoice & { exchange_rate: number };
+
+export type InvoiceCreateRequest = InvoiceCreate & {
+  status: Invoice["status"];
+  exchange_rate: number;
+};
+
 const INVOICES_KEY = "invoices";
 const INVOICE_KEY = "invoice";
 const INVOICE_LINES_KEY = "invoice-lines";

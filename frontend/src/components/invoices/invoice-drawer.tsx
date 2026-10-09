@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,7 @@ import {
   type InvoiceWithCurrency,
   type InvoiceCreateRequest,
 } from "@/hooks/use-invoices";
+import { type TaxCode } from "@/hooks/use-tax-codes";
 
 import { cn } from "@/lib/utils";
 
@@ -40,6 +41,8 @@ export interface InvoiceLineForm {
   quantity: number;
   unit_price: number;
   line_total: number;
+  tax_code_id: string | null;
+  tax_amount: number;
 }
 
 interface InvoiceDrawerProps {
@@ -48,6 +51,7 @@ interface InvoiceDrawerProps {
   invoice?: InvoiceWithCurrency | null;
   lines?: InvoiceLine[] | null;
   parties: Party[];
+  taxCodes: TaxCode[];
   lhdnStatus?: LhdnSubmission | null;
   isLoading?: boolean;
   isSaving?: boolean;
@@ -90,6 +94,8 @@ function emptyLine(): InvoiceLineForm {
     quantity: 1,
     unit_price: 0,
     line_total: 0,
+    tax_code_id: null,
+    tax_amount: 0,
   };
 }
 
@@ -103,6 +109,8 @@ function buildInitialLines(
     quantity: line.quantity,
     unit_price: line.unit_price,
     line_total: line.line_total,
+    tax_code_id: line.tax_code_id,
+    tax_amount: line.tax_amount,
   }));
 }
 
@@ -136,6 +144,7 @@ export function InvoiceDrawer({
   invoice,
   lines,
   parties,
+  taxCodes,
   lhdnStatus,
   isLoading,
   isSaving,
@@ -146,6 +155,14 @@ export function InvoiceDrawer({
   onDelete,
   onSubmitLhdn,
 }: InvoiceDrawerProps) {
+  const taxCodeById = useMemo(() => {
+    const map = new Map<string, TaxCode>();
+    for (const taxCode of taxCodes) {
+      map.set(taxCode.id, taxCode);
+    }
+    return map;
+  }, [taxCodes]);
+
   const [form, setForm] = useState<InvoiceCreateRequest>(() =>
     buildInitialForm(invoice)
   );
@@ -170,11 +187,21 @@ export function InvoiceDrawer({
     (sum, line) => sum + line.quantity * line.unit_price,
     0
   );
+  const totalTaxAmount = lineItems.reduce((sum, line) => sum + line.tax_amount, 0);
+  const totalForeignAmountWithTax = totalForeignAmount + totalTaxAmount;
   const totalMyrAmount = totalForeignAmount * exchangeRate;
+  const totalMyrAmountWithTax = totalMyrAmount + totalTaxAmount;
+
+  const computeTaxAmount = (line: InvoiceLineForm): number => {
+    if (!line.tax_code_id) return 0;
+    const taxCode = taxCodeById.get(line.tax_code_id);
+    if (!taxCode) return 0;
+    return Math.round(line.line_total * taxCode.rate * 100) / 100;
+  };
 
   const updateLine = (
     index: number,
-    field: "description" | "quantity" | "unit_price",
+    field: "description" | "quantity" | "unit_price" | "tax_code_id",
     value: string | number
   ) => {
     setLineItems((prev) => {
@@ -187,7 +214,10 @@ export function InvoiceDrawer({
         line.line_total = computeLineTotal(line.quantity, line.unit_price);
       } else if (field === "description") {
         line.description = String(value);
+      } else if (field === "tax_code_id") {
+        line.tax_code_id = value === "" ? null : String(value);
       }
+      line.tax_amount = computeTaxAmount(line);
 
       next[index] = line;
       return next;
@@ -209,10 +239,15 @@ export function InvoiceDrawer({
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    const payloadLines = lineItems.map((line) => ({
-      ...line,
-      line_total: computeLineTotal(line.quantity, line.unit_price),
-    }));
+    const payloadLines = lineItems.map((line) => {
+      const line_total = computeLineTotal(line.quantity, line.unit_price);
+      const tax_amount = computeTaxAmount({ ...line, line_total });
+      return {
+        ...line,
+        line_total,
+        tax_amount,
+      };
+    });
     onSave({ form, lines: payloadLines });
   };
 
@@ -458,6 +493,10 @@ export function InvoiceDrawer({
                             <TableHead className="w-32">
                               Unit Price ({currency})
                             </TableHead>
+                            <TableHead className="w-36">Tax Code</TableHead>
+                            <TableHead className="w-28 text-right">
+                              Tax ({currency})
+                            </TableHead>
                             <TableHead className="w-28 text-right">
                               Total ({currency})
                             </TableHead>
@@ -513,12 +552,35 @@ export function InvoiceDrawer({
                                   required
                                 />
                               </TableCell>
+                              <TableCell>
+                                <select
+                                  value={line.tax_code_id ?? ""}
+                                  onChange={(e) =>
+                                    updateLine(
+                                      index,
+                                      "tax_code_id",
+                                      e.target.value
+                                    )
+                                  }
+                                  className="flex h-9 w-full rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                >
+                                  <option value="">No tax</option>
+                                  {taxCodes.map((taxCode) => (
+                                    <option key={taxCode.id} value={taxCode.id}>
+                                      {taxCode.code} ({taxCode.rate * 100}%)
+                                    </option>
+                                  ))}
+                                </select>
+                              </TableCell>
+                              <TableCell className="text-right font-medium">
+                                {formatCurrency(line.tax_amount, currency)}
+                              </TableCell>
                               <TableCell className="text-right font-medium">
                                 {formatCurrency(
                                   computeLineTotal(
                                     line.quantity,
                                     line.unit_price
-                                  ),
+                                  ) + line.tax_amount,
                                   currency
                                 )}
                               </TableCell>
@@ -592,16 +654,28 @@ export function InvoiceDrawer({
                   )}
 
                   <div className="flex justify-end">
-                    <div className="text-right">
+                    <div className="text-right space-y-1">
+                      <p className="text-sm text-muted-foreground">
+                        Subtotal ({currency})
+                      </p>
+                      <p className="text-xl font-semibold">
+                        {formatCurrency(totalForeignAmount, currency)}
+                      </p>
+                      {totalTaxAmount > 0 && (
+                        <p className="text-sm text-muted-foreground">
+                          Tax ({currency}):{" "}
+                          {formatCurrency(totalTaxAmount, currency)}
+                        </p>
+                      )}
                       <p className="text-sm text-muted-foreground">
                         Total ({currency})
                       </p>
                       <p className="text-2xl font-semibold">
-                        {formatCurrency(totalForeignAmount, currency)}
+                        {formatCurrency(totalForeignAmountWithTax, currency)}
                       </p>
                       {currency !== "MYR" && (
                         <p className="text-sm text-muted-foreground">
-                          ≈ {formatCurrency(totalMyrAmount, "MYR")}
+                          ≈ {formatCurrency(totalMyrAmountWithTax, "MYR")}
                         </p>
                       )}
                     </div>

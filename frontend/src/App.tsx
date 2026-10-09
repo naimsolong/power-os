@@ -28,6 +28,7 @@ import { LandingPage } from "@/pages/landing";
 import { PaymentsPage } from "@/pages/payments";
 import { SettingsPage } from "@/pages/settings";
 import { TaxCodesPage } from "@/pages/tax-codes";
+import { TaxReportsPage } from "@/pages/tax-reports";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -89,6 +90,7 @@ const router = createBrowserRouter([
               { path: "payments", element: <PaymentsPage /> },
               { path: "ai-assistant", element: <AiAssistantPage /> },
               { path: "tax-codes", element: <TaxCodesPage /> },
+              { path: "tax-reports", element: <TaxReportsPage /> },
               { path: "fiscal-periods", element: <FiscalPeriodsPage /> },
               { path: "settings", element: <SettingsPage /> },
               { index: true, element: <Navigate to="/dashboard" replace /> },

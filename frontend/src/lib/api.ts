@@ -267,6 +267,8 @@ export interface InvoiceLine {
   quantity: number;
   unit_price: number;
   line_total: number;
+  tax_code_id: string | null;
+  tax_amount: number;
 }
 
 export interface Invoice {
@@ -278,6 +280,7 @@ export interface Invoice {
   status: InvoiceStatus;
   total_amount: number;
   currency: string;
+  exchange_rate: number;
   lhdn_status: string | null;
   lhdn_uuid: string | null;
   lhdn_error: string | null;
@@ -290,6 +293,7 @@ export interface InvoiceCreate {
   due_date: string;
   status?: InvoiceStatus;
   currency?: string;
+  exchange_rate?: number;
 }
 
 export type InvoiceUpdate = Partial<InvoiceCreate>;
@@ -299,6 +303,7 @@ export interface InvoiceLineCreate {
   quantity: number;
   unit_price: number;
   line_total: number;
+  tax_code_id?: string | null;
 }
 
 export type InvoiceLineUpdate = Partial<InvoiceLineCreate>;

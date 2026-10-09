@@ -36,6 +36,7 @@ const navItems = [
   { to: "/payments", label: "Payments", icon: Wallet },
   { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
   { to: "/tax-codes", label: "Tax Codes", icon: Receipt },
+  { to: "/tax-reports", label: "Tax Reports", icon: FileText },
   { to: "/fiscal-periods", label: "Periods", icon: CalendarRange },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
