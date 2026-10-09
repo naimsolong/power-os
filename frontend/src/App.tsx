@@ -18,9 +18,12 @@ import { CompaniesPage } from "@/pages/companies";
 import { DealsPage } from "@/pages/deals";
 import { InvoicesPage } from "@/pages/invoices";
 import { AiAssistantPage } from "@/pages/ai-assistant";
+import { BillsPage } from "@/pages/bills";
 import { ChartOfAccountsPage } from "@/pages/chart-of-accounts";
 import { EmployeesPage } from "@/pages/employees";
+import { ExpensesPage } from "@/pages/expenses";
 import { FiscalPeriodsPage } from "@/pages/fiscal-periods";
+import { JournalEntriesPage } from "@/pages/journal-entries";
 import { LandingPage } from "@/pages/landing";
 import { SettingsPage } from "@/pages/settings";
 import { TaxCodesPage } from "@/pages/tax-codes";
@@ -77,8 +80,11 @@ const router = createBrowserRouter([
               { path: "companies", element: <CompaniesPage /> },
               { path: "deals", element: <DealsPage /> },
               { path: "invoices", element: <InvoicesPage /> },
+              { path: "bills", element: <BillsPage /> },
+              { path: "expenses", element: <ExpensesPage /> },
               { path: "employees", element: <EmployeesPage /> },
               { path: "chart-of-accounts", element: <ChartOfAccountsPage /> },
+              { path: "journal-entries", element: <JournalEntriesPage /> },
               { path: "ai-assistant", element: <AiAssistantPage /> },
               { path: "tax-codes", element: <TaxCodesPage /> },
               { path: "fiscal-periods", element: <FiscalPeriodsPage /> },

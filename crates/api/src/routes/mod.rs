@@ -10,10 +10,12 @@ use crate::lhdn;
 use crate::state::AppState;
 
 pub(crate) mod accounts;
+pub(crate) mod bills;
 mod deal_stages;
 mod deals;
 pub(crate) mod employees;
 pub(crate) mod error;
+pub(crate) mod expenses;
 pub(crate) mod fiscal_periods;
 mod health;
 pub(crate) mod invoices;
@@ -31,6 +33,8 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/accounts", accounts::router())
         .nest("/api/employees", employees::router())
         .nest("/api/invoices", invoices::router())
+        .nest("/api/bills", bills::router())
+        .nest("/api/expenses", expenses::router())
         .nest("/api/journal-entries", journal_entries::router())
         .nest("/api/tax-codes", tax_codes::router())
         .nest("/api/fiscal-years", fiscal_periods::router())

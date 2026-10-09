@@ -13,6 +13,9 @@ import {
   BookOpen,
   Receipt,
   CalendarRange,
+  NotebookPen,
+  Banknote,
+  FileMinus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
@@ -24,8 +27,11 @@ const navItems = [
   { to: "/companies", label: "Companies", icon: Building2 },
   { to: "/deals", label: "Deals", icon: Handshake },
   { to: "/invoices", label: "Invoices", icon: FileText },
+  { to: "/bills", label: "Bills", icon: FileMinus },
+  { to: "/expenses", label: "Expenses", icon: Banknote },
   { to: "/employees", label: "Employees", icon: Briefcase },
   { to: "/chart-of-accounts", label: "Chart of Accounts", icon: BookOpen },
+  { to: "/journal-entries", label: "Journal Entries", icon: NotebookPen },
   { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
   { to: "/tax-codes", label: "Tax Codes", icon: Receipt },
   { to: "/fiscal-periods", label: "Periods", icon: CalendarRange },

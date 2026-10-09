@@ -4,7 +4,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use bigdecimal::{BigDecimal, Zero};
@@ -54,9 +54,20 @@ pub struct CreateJournalEntryRequest {
     pub lines: Vec<CreateJournalLineRequest>,
 }
 
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateJournalEntryRequest {
+    pub entry_date: Option<Date>,
+    pub reference: Option<String>,
+    pub description: Option<String>,
+    pub status: Option<JournalEntryStatus>,
+    pub lines: Option<Vec<CreateJournalLineRequest>>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct JournalEntryListQuery {
     pub status: Option<JournalEntryStatus>,
+    pub from: Option<Date>,
+    pub to: Option<Date>,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,6 +90,12 @@ pub struct JournalEntryResponse {
     pub description: Option<String>,
     pub status: String,
     pub lines: Vec<JournalLineResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CancelJournalEntryResponse {
+    pub original_entry: JournalEntryResponse,
+    pub reversing_entry: JournalEntryResponse,
 }
 
 fn map_journal_entry_row(row: &sqlx::postgres::PgRow) -> Result<JournalEntryResponse, sqlx::Error> {
@@ -108,7 +125,14 @@ fn map_journal_line_row(row: &sqlx::postgres::PgRow) -> Result<JournalLineRespon
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_journal_entries).post(create_journal_entry))
-        .route("/{id}", get(get_journal_entry).delete(delete_journal_entry))
+        .route(
+            "/{id}",
+            get(get_journal_entry)
+                .patch(update_journal_entry)
+                .delete(delete_journal_entry),
+        )
+        .route("/{id}/post", post(post_journal_entry))
+        .route("/{id}/cancel", post(cancel_journal_entry))
 }
 
 async fn ensure_account_in_workspace(
@@ -116,15 +140,17 @@ async fn ensure_account_in_workspace(
     account_id: AccountId,
     workspace_id: WorkspaceId,
 ) -> Result<(), ApiError> {
-    let exists = query("SELECT 1 FROM account WHERE id = $1 AND workspace_id = $2")
-        .bind(account_id.0)
-        .bind(workspace_id.0)
-        .fetch_optional(db)
-        .await?;
+    let exists = query(
+        "SELECT 1 FROM account WHERE id = $1 AND workspace_id = $2 AND is_active = true",
+    )
+    .bind(account_id.0)
+    .bind(workspace_id.0)
+    .fetch_optional(db)
+    .await?;
 
     if exists.is_none() {
         return Err(ApiError::BadRequest(
-            "Account not found in workspace".to_string(),
+            "Account not found in workspace or is inactive".to_string(),
         ));
     }
     Ok(())
@@ -146,6 +172,125 @@ async fn ensure_party_in_workspace(
             "Party not found in workspace".to_string(),
         ));
     }
+    Ok(())
+}
+
+fn normalize_amount(value: Option<&BigDecimal>) -> BigDecimal {
+    value.cloned().unwrap_or_else(BigDecimal::zero)
+}
+
+trait JournalLineLike {
+    fn debit(&self) -> BigDecimal;
+    fn credit(&self) -> BigDecimal;
+}
+
+impl JournalLineLike for CreateJournalLineRequest {
+    fn debit(&self) -> BigDecimal {
+        self.debit.clone().unwrap_or_else(BigDecimal::zero)
+    }
+    fn credit(&self) -> BigDecimal {
+        self.credit.clone().unwrap_or_else(BigDecimal::zero)
+    }
+}
+
+impl JournalLineLike for JournalLineResponse {
+    fn debit(&self) -> BigDecimal {
+        self.debit.clone()
+    }
+    fn credit(&self) -> BigDecimal {
+        self.credit.clone()
+    }
+}
+
+fn validate_lines<L: JournalLineLike>(lines: &[L]) -> Result<(BigDecimal, BigDecimal), ApiError> {
+    if lines.len() < 2 {
+        return Err(ApiError::BadRequest(
+            "At least two journal lines are required".to_string(),
+        ));
+    }
+
+    let zero = BigDecimal::zero();
+    let mut total_debit = BigDecimal::zero();
+    let mut total_credit = BigDecimal::zero();
+
+    for (idx, line) in lines.iter().enumerate() {
+        let debit = line.debit();
+        let credit = line.credit();
+
+        if debit < zero || credit < zero {
+            return Err(ApiError::BadRequest(format!(
+                "Line {}: debit and credit must be non-negative",
+                idx + 1
+            )));
+        }
+
+        if debit > zero && credit > zero {
+            return Err(ApiError::BadRequest(format!(
+                "Line {}: a line cannot have both debit and credit",
+                idx + 1
+            )));
+        }
+
+        if debit == zero && credit == zero {
+            return Err(ApiError::BadRequest(format!(
+                "Line {}: a line must have either debit or credit greater than zero",
+                idx + 1
+            )));
+        }
+
+        total_debit += debit;
+        total_credit += credit;
+    }
+
+    if total_debit != total_credit {
+        return Err(ApiError::BadRequest(
+            "Journal entry debits must equal credits".to_string(),
+        ));
+    }
+
+    Ok((total_debit, total_credit))
+}
+
+async fn validate_lines_accounts(
+    db: &sqlx::PgPool,
+    lines: &[CreateJournalLineRequest],
+    workspace_id: WorkspaceId,
+) -> Result<(), ApiError> {
+    for line in lines {
+        ensure_account_in_workspace(db, line.account_id, workspace_id).await?;
+        if let Some(party_id) = line.party_id {
+            ensure_party_in_workspace(db, party_id, workspace_id).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn insert_journal_lines(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    journal_entry_id: JournalEntryId,
+    lines: &[CreateJournalLineRequest],
+) -> Result<(), ApiError> {
+    for line in lines {
+        let debit = normalize_amount(line.debit.as_ref());
+        let credit = normalize_amount(line.credit.as_ref());
+
+        query(
+            r#"
+            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(JournalLineId::new().0)
+        .bind(journal_entry_id.0)
+        .bind(line.account_id.0)
+        .bind(line.party_id.map(|p| p.0))
+        .bind(line.description.as_deref())
+        .bind(&debit)
+        .bind(&credit)
+        .execute(&mut **tx)
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -212,11 +357,15 @@ pub async fn list_journal_entries(
         FROM journal_entry
         WHERE workspace_id = $1
           AND ($2::text IS NULL OR status = $2)
+          AND ($3::date IS NULL OR entry_date >= $3)
+          AND ($4::date IS NULL OR entry_date <= $4)
         ORDER BY entry_date DESC, reference
         "#,
     )
     .bind(auth_user.workspace_id.0)
     .bind(status)
+    .bind(params.from)
+    .bind(params.to)
     .fetch_all(&state.db)
     .await?;
 
@@ -237,38 +386,8 @@ pub async fn create_journal_entry(
 ) -> Result<(StatusCode, Json<JournalEntryResponse>), ApiError> {
     payload.validate()?;
 
-    if payload.lines.len() < 2 {
-        return Err(ApiError::BadRequest(
-            "At least two journal lines are required".to_string(),
-        ));
-    }
-
-    let zero = BigDecimal::zero();
-
-    let total_debit: BigDecimal = payload
-        .lines
-        .iter()
-        .map(|line| line.debit.as_ref().unwrap_or(&zero))
-        .fold(BigDecimal::zero(), |acc, x| acc + x);
-
-    let total_credit: BigDecimal = payload
-        .lines
-        .iter()
-        .map(|line| line.credit.as_ref().unwrap_or(&zero))
-        .fold(BigDecimal::zero(), |acc, x| acc + x);
-
-    if total_debit != total_credit {
-        return Err(ApiError::BadRequest(
-            "Journal entry debits must equal credits".to_string(),
-        ));
-    }
-
-    for line in &payload.lines {
-        ensure_account_in_workspace(&state.db, line.account_id, auth_user.workspace_id).await?;
-        if let Some(party_id) = line.party_id {
-            ensure_party_in_workspace(&state.db, party_id, auth_user.workspace_id).await?;
-        }
-    }
+    validate_lines(&payload.lines)?;
+    validate_lines_accounts(&state.db, &payload.lines, auth_user.workspace_id).await?;
 
     let status = payload
         .status
@@ -294,26 +413,7 @@ pub async fn create_journal_entry(
     .execute(&mut *tx)
     .await?;
 
-    for line in &payload.lines {
-        let debit = line.debit.as_ref().unwrap_or(&zero);
-        let credit = line.credit.as_ref().unwrap_or(&zero);
-
-        query(
-            r#"
-            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            "#,
-        )
-        .bind(JournalLineId::new().0)
-        .bind(journal_entry_id.0)
-        .bind(line.account_id.0)
-        .bind(line.party_id.map(|p| p.0))
-        .bind(line.description.as_deref())
-        .bind(debit)
-        .bind(credit)
-        .execute(&mut *tx)
-        .await?;
-    }
+    insert_journal_lines(&mut tx, journal_entry_id, &payload.lines).await?;
 
     tx.commit().await?;
 
@@ -336,11 +436,91 @@ pub async fn get_journal_entry(
     Ok((StatusCode::OK, Json(entry)))
 }
 
+pub async fn update_journal_entry(
+    State(state): State<AppState>,
+    Path(id): Path<JournalEntryId>,
+    auth_user: AuthUser,
+    Json(payload): Json<UpdateJournalEntryRequest>,
+) -> Result<(StatusCode, Json<JournalEntryResponse>), ApiError> {
+    payload.validate()?;
+
+    let existing = fetch_journal_entry(&state.db, id, auth_user.workspace_id).await?;
+    let existing = match existing {
+        Some(entry) => entry,
+        None => return Err(ApiError::NotFound),
+    };
+
+    if existing.status != "draft" {
+        return Err(ApiError::BadRequest(
+            "Only draft journal entries can be updated".to_string(),
+        ));
+    }
+
+    if let Some(ref lines) = payload.lines {
+        validate_lines(lines)?;
+        validate_lines_accounts(&state.db, lines, auth_user.workspace_id).await?;
+    }
+
+    let status = payload.status.as_ref().map(|s| s.as_str());
+
+    let mut tx = state.db.begin().await?;
+
+    query(
+        r#"
+        UPDATE journal_entry
+        SET
+            entry_date = COALESCE($3, entry_date),
+            reference = COALESCE($4, reference),
+            description = COALESCE($5, description),
+            status = COALESCE($6, status),
+            updated_at = now()
+        WHERE id = $1 AND workspace_id = $2
+        "#,
+    )
+    .bind(id.0)
+    .bind(auth_user.workspace_id.0)
+    .bind(payload.entry_date)
+    .bind(payload.reference.as_deref())
+    .bind(payload.description.as_deref())
+    .bind(status)
+    .execute(&mut *tx)
+    .await?;
+
+    if let Some(lines) = payload.lines {
+        query("DELETE FROM journal_line WHERE journal_entry_id = $1")
+            .bind(id.0)
+            .execute(&mut *tx)
+            .await?;
+
+        insert_journal_lines(&mut tx, id, &lines).await?;
+    }
+
+    tx.commit().await?;
+
+    let entry = fetch_journal_entry(&state.db, id, auth_user.workspace_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok((StatusCode::OK, Json(entry)))
+}
+
 pub async fn delete_journal_entry(
     State(state): State<AppState>,
     Path(id): Path<JournalEntryId>,
     auth_user: AuthUser,
 ) -> Result<StatusCode, ApiError> {
+    let existing = fetch_journal_entry(&state.db, id, auth_user.workspace_id).await?;
+    let existing = match existing {
+        Some(entry) => entry,
+        None => return Err(ApiError::NotFound),
+    };
+
+    if existing.status != "draft" {
+        return Err(ApiError::BadRequest(
+            "Only draft journal entries can be deleted".to_string(),
+        ));
+    }
+
     let result = query("DELETE FROM journal_entry WHERE id = $1 AND workspace_id = $2")
         .bind(id.0)
         .bind(auth_user.workspace_id.0)
@@ -352,4 +532,135 @@ pub async fn delete_journal_entry(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn post_journal_entry(
+    State(state): State<AppState>,
+    Path(id): Path<JournalEntryId>,
+    auth_user: AuthUser,
+) -> Result<(StatusCode, Json<JournalEntryResponse>), ApiError> {
+    let existing = fetch_journal_entry(&state.db, id, auth_user.workspace_id).await?;
+    let existing = match existing {
+        Some(entry) => entry,
+        None => return Err(ApiError::NotFound),
+    };
+
+    if existing.status != "draft" {
+        return Err(ApiError::BadRequest(
+            "Only draft journal entries can be posted".to_string(),
+        ));
+    }
+
+    validate_lines(&existing.lines)?;
+
+    query(
+        r#"
+        UPDATE journal_entry
+        SET status = 'posted', updated_at = now()
+        WHERE id = $1 AND workspace_id = $2
+        "#,
+    )
+    .bind(id.0)
+    .bind(auth_user.workspace_id.0)
+    .execute(&state.db)
+    .await?;
+
+    let entry = fetch_journal_entry(&state.db, id, auth_user.workspace_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok((StatusCode::OK, Json(entry)))
+}
+
+pub async fn cancel_journal_entry(
+    State(state): State<AppState>,
+    Path(id): Path<JournalEntryId>,
+    auth_user: AuthUser,
+) -> Result<(StatusCode, Json<CancelJournalEntryResponse>), ApiError> {
+    let original = fetch_journal_entry(&state.db, id, auth_user.workspace_id).await?;
+    let original = match original {
+        Some(entry) => entry,
+        None => return Err(ApiError::NotFound),
+    };
+
+    if original.status != "posted" {
+        return Err(ApiError::BadRequest(
+            "Only posted journal entries can be cancelled".to_string(),
+        ));
+    }
+
+    let reversing_entry_id = JournalEntryId::new();
+    let reference = original
+        .reference
+        .as_deref()
+        .map(|r| format!("REV-{}", r))
+        .or_else(|| Some(format!("REV-{}", id.0)));
+    let description = original
+        .description
+        .as_deref()
+        .map(|d| format!("Reversal of {}", d))
+        .or_else(|| Some(format!("Reversal of journal entry {}", id.0)));
+
+    let mut tx = state.db.begin().await?;
+
+    query(
+        r#"
+        UPDATE journal_entry
+        SET status = 'cancelled', updated_at = now()
+        WHERE id = $1 AND workspace_id = $2
+        "#,
+    )
+    .bind(id.0)
+    .bind(auth_user.workspace_id.0)
+    .execute(&mut *tx)
+    .await?;
+
+    query(
+        r#"
+        INSERT INTO journal_entry (id, workspace_id, entry_date, reference, description, status)
+        VALUES ($1, $2, $3, $4, $5, 'posted')
+        "#,
+    )
+    .bind(reversing_entry_id.0)
+    .bind(auth_user.workspace_id.0)
+    .bind(original.entry_date)
+    .bind(&reference)
+    .bind(&description)
+    .execute(&mut *tx)
+    .await?;
+
+    for line in &original.lines {
+        query(
+            r#"
+            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(JournalLineId::new().0)
+        .bind(reversing_entry_id.0)
+        .bind(line.account_id.0)
+        .bind(line.party_id.map(|p| p.0))
+        .bind(line.description.as_deref().map(|d| format!("Reversal - {}", d)))
+        .bind(&line.credit)
+        .bind(&line.debit)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    let original = fetch_journal_entry(&state.db, id, auth_user.workspace_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let reversing = fetch_journal_entry(&state.db, reversing_entry_id, auth_user.workspace_id)
+        .await?
+        .ok_or(ApiError::Internal)?;
+
+    Ok((
+        StatusCode::OK,
+        Json(CancelJournalEntryResponse {
+            original_entry: original,
+            reversing_entry: reversing,
+        }),
+    ))
 }
