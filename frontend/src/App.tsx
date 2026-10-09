@@ -25,6 +25,7 @@ import { ExpensesPage } from "@/pages/expenses";
 import { FiscalPeriodsPage } from "@/pages/fiscal-periods";
 import { JournalEntriesPage } from "@/pages/journal-entries";
 import { LandingPage } from "@/pages/landing";
+import { PaymentsPage } from "@/pages/payments";
 import { SettingsPage } from "@/pages/settings";
 import { TaxCodesPage } from "@/pages/tax-codes";
 
@@ -85,6 +86,7 @@ const router = createBrowserRouter([
               { path: "employees", element: <EmployeesPage /> },
               { path: "chart-of-accounts", element: <ChartOfAccountsPage /> },
               { path: "journal-entries", element: <JournalEntriesPage /> },
+              { path: "payments", element: <PaymentsPage /> },
               { path: "ai-assistant", element: <AiAssistantPage /> },
               { path: "tax-codes", element: <TaxCodesPage /> },
               { path: "fiscal-periods", element: <FiscalPeriodsPage /> },

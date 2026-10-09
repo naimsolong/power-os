@@ -16,6 +16,7 @@ import {
   NotebookPen,
   Banknote,
   FileMinus,
+  Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
@@ -32,6 +33,7 @@ const navItems = [
   { to: "/employees", label: "Employees", icon: Briefcase },
   { to: "/chart-of-accounts", label: "Chart of Accounts", icon: BookOpen },
   { to: "/journal-entries", label: "Journal Entries", icon: NotebookPen },
+  { to: "/payments", label: "Payments", icon: Wallet },
   { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
   { to: "/tax-codes", label: "Tax Codes", icon: Receipt },
   { to: "/fiscal-periods", label: "Periods", icon: CalendarRange },
