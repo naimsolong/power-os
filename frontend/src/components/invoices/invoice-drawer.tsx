@@ -18,8 +18,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  type Invoice,
-  type InvoiceCreate,
   type InvoiceLine,
   type InvoiceStatus,
   type LhdnSubmission,
@@ -27,8 +25,14 @@ import {
   INVOICE_STATUS_LABELS,
   INVOICE_STATUS_OPTIONS,
 } from "@/lib/api";
+import {
+  type InvoiceWithCurrency,
+  type InvoiceCreateRequest,
+} from "@/hooks/use-invoices";
 
 import { cn } from "@/lib/utils";
+
+const SUPPORTED_CURRENCIES = ["MYR", "USD", "EUR", "SGD"];
 
 export interface InvoiceLineForm {
   id?: string;
@@ -41,7 +45,7 @@ export interface InvoiceLineForm {
 interface InvoiceDrawerProps {
   isOpen: boolean;
   invoiceId: string | null;
-  invoice?: Invoice | null;
+  invoice?: InvoiceWithCurrency | null;
   lines?: InvoiceLine[] | null;
   parties: Party[];
   lhdnStatus?: LhdnSubmission | null;
@@ -50,21 +54,24 @@ interface InvoiceDrawerProps {
   isSubmittingLhdn?: boolean;
   error?: Error | null;
   onClose: () => void;
-  onSave: (payload: { form: InvoiceCreate; lines: InvoiceLineForm[] }) => void;
+  onSave: (payload: { form: InvoiceCreateRequest; lines: InvoiceLineForm[] }) => void;
   onDelete?: (id: string) => void;
   onSubmitLhdn?: (id: string) => void;
 }
 
-const emptyForm: InvoiceCreate = {
+const emptyForm: InvoiceCreateRequest = {
   party_id: "",
   invoice_number: "",
   issue_date: "",
   due_date: "",
   status: "draft",
-  currency: "USD",
+  currency: "MYR",
+  exchange_rate: 1,
 };
 
-function buildInitialForm(invoice: Invoice | null | undefined): InvoiceCreate {
+function buildInitialForm(
+  invoice: InvoiceWithCurrency | null | undefined
+): InvoiceCreateRequest {
   if (!invoice) return { ...emptyForm };
   return {
     party_id: invoice.party_id,
@@ -73,6 +80,7 @@ function buildInitialForm(invoice: Invoice | null | undefined): InvoiceCreate {
     due_date: invoice.due_date.slice(0, 10),
     status: invoice.status,
     currency: invoice.currency,
+    exchange_rate: invoice.exchange_rate,
   };
 }
 
@@ -103,7 +111,7 @@ function computeLineTotal(quantity: number, unitPrice: number): number {
 }
 
 function buildDrawerKey(
-  invoice: Invoice | null | undefined,
+  invoice: InvoiceWithCurrency | null | undefined,
   invoiceId: string | null,
   lines: InvoiceLine[] | null | undefined
 ): string {
@@ -115,10 +123,10 @@ function formatCurrency(value: number, currency: string): string {
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
-      currency: currency || "USD",
+      currency: currency || "MYR",
     }).format(value);
   } catch {
-    return `$${value.toLocaleString()}`;
+    return `${currency || "MYR"} ${value.toLocaleString()}`;
   }
 }
 
@@ -138,7 +146,7 @@ export function InvoiceDrawer({
   onDelete,
   onSubmitLhdn,
 }: InvoiceDrawerProps) {
-  const [form, setForm] = useState<InvoiceCreate>(() =>
+  const [form, setForm] = useState<InvoiceCreateRequest>(() =>
     buildInitialForm(invoice)
   );
   const [lineItems, setLineItems] = useState<InvoiceLineForm[]>(() =>
@@ -155,10 +163,14 @@ export function InvoiceDrawer({
     setLineItems(buildInitialLines(lines));
   }
 
-  const totalAmount = lineItems.reduce(
+  const currency = form.currency ?? "MYR";
+  const exchangeRate = form.exchange_rate ?? 1;
+
+  const totalForeignAmount = lineItems.reduce(
     (sum, line) => sum + line.quantity * line.unit_price,
     0
   );
+  const totalMyrAmount = totalForeignAmount * exchangeRate;
 
   const updateLine = (
     index: number,
@@ -377,16 +389,48 @@ export function InvoiceDrawer({
                       >
                         Currency
                       </label>
-                      <Input
+                      <select
                         id="invoice-currency"
                         value={form.currency}
                         onChange={(e) =>
                           setForm((prev) => ({
                             ...prev,
                             currency: e.target.value,
+                            exchange_rate:
+                              e.target.value === "MYR" ? 1 : prev.exchange_rate,
                           }))
                         }
-                        placeholder="USD"
+                        required
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      >
+                        {SUPPORTED_CURRENCIES.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label
+                        htmlFor="invoice-exchange-rate"
+                        className="text-sm font-medium"
+                      >
+                        Exchange Rate
+                      </label>
+                      <Input
+                        id="invoice-exchange-rate"
+                        type="number"
+                        min="0.000001"
+                        step="0.000001"
+                        value={form.exchange_rate ?? 1}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            exchange_rate: Number(e.target.value),
+                          }))
+                        }
+                        disabled={form.currency === "MYR"}
                         required
                       />
                     </div>
@@ -411,9 +455,11 @@ export function InvoiceDrawer({
                           <TableRow>
                             <TableHead>Description</TableHead>
                             <TableHead className="w-28">Quantity</TableHead>
-                            <TableHead className="w-32">Unit Price</TableHead>
+                            <TableHead className="w-32">
+                              Unit Price ({currency})
+                            </TableHead>
                             <TableHead className="w-28 text-right">
-                              Total
+                              Total ({currency})
                             </TableHead>
                             <TableHead className="w-16" />
                           </TableRow>
@@ -473,7 +519,7 @@ export function InvoiceDrawer({
                                     line.quantity,
                                     line.unit_price
                                   ),
-                                  form.currency ?? "USD"
+                                  currency
                                 )}
                               </TableCell>
                               <TableCell>
@@ -547,10 +593,17 @@ export function InvoiceDrawer({
 
                   <div className="flex justify-end">
                     <div className="text-right">
-                      <p className="text-sm text-muted-foreground">Total</p>
-                      <p className="text-2xl font-semibold">
-                        {formatCurrency(totalAmount, form.currency ?? "USD")}
+                      <p className="text-sm text-muted-foreground">
+                        Total ({currency})
                       </p>
+                      <p className="text-2xl font-semibold">
+                        {formatCurrency(totalForeignAmount, currency)}
+                      </p>
+                      {currency !== "MYR" && (
+                        <p className="text-sm text-muted-foreground">
+                          ≈ {formatCurrency(totalMyrAmount, "MYR")}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </>

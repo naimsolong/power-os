@@ -43,6 +43,8 @@ export interface BillLine {
   quantity: number;
   unit_price: number;
   amount: number;
+  foreign_unit_price: number;
+  foreign_amount: number;
 }
 
 export interface Bill {
@@ -55,6 +57,7 @@ export interface Bill {
   status: BillStatus;
   total_amount: number;
   currency: string;
+  exchange_rate: number;
   journal_entry_id?: string;
   lines?: BillLine[];
 }
@@ -72,6 +75,7 @@ export interface BillCreate {
   issue_date: string;
   due_date?: string;
   currency?: string;
+  exchange_rate?: number;
   lines: BillLineCreate[];
 }
 

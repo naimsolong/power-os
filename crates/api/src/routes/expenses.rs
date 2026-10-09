@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use bigdecimal::{BigDecimal, Zero};
+use bigdecimal::{BigDecimal, One, Zero};
 use power_os_domain::{
     AccountId, ExpenseId, ExpenseLineId, JournalEntryId, JournalLineId, PartyId, WorkspaceId,
 };
@@ -38,6 +38,34 @@ impl ExpenseStatus {
     }
 }
 
+fn supported_currency(currency: &str) -> bool {
+    matches!(currency, "MYR" | "USD" | "EUR" | "SGD")
+}
+
+fn normalize_rate(value: Option<&BigDecimal>) -> BigDecimal {
+    value.cloned().unwrap_or_else(BigDecimal::one)
+}
+
+fn validate_currency_and_rate(currency: &str, rate: &BigDecimal) -> Result<(), ApiError> {
+    if !supported_currency(currency) {
+        return Err(ApiError::BadRequest(format!(
+            "Unsupported currency: {}. Supported: MYR, USD, EUR, SGD",
+            currency
+        )));
+    }
+    if rate <= &BigDecimal::zero() {
+        return Err(ApiError::BadRequest(
+            "Exchange rate must be greater than zero".to_string(),
+        ));
+    }
+    if currency == "MYR" && rate != &BigDecimal::one() {
+        return Err(ApiError::BadRequest(
+            "MYR transactions must use exchange rate 1".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Validate)]
 pub struct CreateExpenseLineRequest {
     #[validate(length(min = 1, message = "Description is required"))]
@@ -56,6 +84,7 @@ pub struct CreateExpenseRequest {
     pub payment_method: Option<String>,
     pub paid_from_account_id: Option<AccountId>,
     pub currency: Option<String>,
+    pub exchange_rate: Option<BigDecimal>,
     pub lines: Vec<CreateExpenseLineRequest>,
 }
 
@@ -70,6 +99,7 @@ pub struct UpdateExpenseRequest {
     pub paid_from_account_id: Option<AccountId>,
     pub status: Option<ExpenseStatus>,
     pub currency: Option<String>,
+    pub exchange_rate: Option<BigDecimal>,
     pub lines: Option<Vec<CreateExpenseLineRequest>>,
 }
 
@@ -90,6 +120,7 @@ pub struct ExpenseResponse {
     pub reference: Option<String>,
     pub total_amount: BigDecimal,
     pub currency: String,
+    pub exchange_rate: BigDecimal,
     pub payment_method: Option<String>,
     pub status: String,
 }
@@ -104,6 +135,7 @@ pub struct ExpenseDetailResponse {
     pub reference: Option<String>,
     pub total_amount: BigDecimal,
     pub currency: String,
+    pub exchange_rate: BigDecimal,
     pub payment_method: Option<String>,
     pub status: String,
     pub paid_from_account_id: Option<AccountId>,
@@ -118,6 +150,7 @@ pub struct ExpenseLineResponse {
     pub description: String,
     pub account_id: AccountId,
     pub amount: BigDecimal,
+    pub foreign_amount: BigDecimal,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +174,7 @@ fn map_expense_row(row: &sqlx::postgres::PgRow) -> Result<ExpenseResponse, sqlx:
         reference: row.try_get("reference")?,
         total_amount: row.try_get("total_amount")?,
         currency: row.try_get("currency")?,
+        exchange_rate: row.try_get("exchange_rate")?,
         payment_method: row.try_get("payment_method")?,
         status: row.try_get("status")?,
     })
@@ -155,6 +189,7 @@ fn map_expense_line_row(
         description: row.try_get("description")?,
         account_id: AccountId(row.try_get("account_id")?),
         amount: row.try_get("amount")?,
+        foreign_amount: row.try_get("foreign_amount")?,
     })
 }
 
@@ -248,7 +283,7 @@ async fn fetch_expense(
     let row = query(
         r#"
         SELECT id, workspace_id, party_id, expense_date, description, reference,
-               total_amount, currency, payment_method, status
+               total_amount, currency, exchange_rate, payment_method, status
         FROM expense
         WHERE id = $1 AND workspace_id = $2
         "#,
@@ -270,7 +305,7 @@ async fn fetch_expense_lines(
 ) -> Result<Vec<ExpenseLineResponse>, ApiError> {
     let rows = query(
         r#"
-        SELECT id, expense_id, description, account_id, amount
+        SELECT id, expense_id, description, account_id, amount, foreign_amount
         FROM expense_line
         WHERE expense_id = $1
         ORDER BY created_at ASC
@@ -326,6 +361,7 @@ async fn fetch_expense_detail(
         reference: expense.reference,
         total_amount: expense.total_amount,
         currency: expense.currency,
+        exchange_rate: expense.exchange_rate,
         payment_method: expense.payment_method,
         status: expense.status,
         paid_from_account_id,
@@ -338,27 +374,31 @@ async fn insert_expense_lines(
     tx: &mut sqlx::PgConnection,
     expense_id: ExpenseId,
     lines: &[CreateExpenseLineRequest],
+    exchange_rate: &BigDecimal,
 ) -> Result<BigDecimal, ApiError> {
     let mut total = BigDecimal::zero();
 
     for line in lines {
         let line_id = ExpenseLineId::new();
+        let foreign_amount = &line.amount;
+        let myr_amount = foreign_amount * exchange_rate;
 
         query(
             r#"
-            INSERT INTO expense_line (id, expense_id, description, account_id, amount)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO expense_line (id, expense_id, description, account_id, amount, foreign_amount)
+            VALUES ($1, $2, $3, $4, $5, $6)
             "#,
         )
         .bind(line_id.0)
         .bind(expense_id.0)
         .bind(&line.description)
         .bind(line.account_id.0)
-        .bind(&line.amount)
+        .bind(&myr_amount)
+        .bind(&foreign_amount)
         .execute(&mut *tx)
         .await?;
 
-        total = total + &line.amount;
+        total = total + &myr_amount;
     }
 
     Ok(total)
@@ -375,7 +415,7 @@ pub async fn list_expenses(
     let rows = query(
         r#"
         SELECT id, workspace_id, party_id, expense_date, description, reference,
-               total_amount, currency, payment_method, status
+               total_amount, currency, exchange_rate, payment_method, status
         FROM expense
         WHERE workspace_id = $1
           AND ($2::uuid IS NULL OR party_id = $2)
@@ -416,6 +456,8 @@ pub async fn create_expense(
 
     let expense_id = ExpenseId::new();
     let currency = payload.currency.as_deref().unwrap_or("MYR");
+    let exchange_rate = normalize_rate(payload.exchange_rate.as_ref());
+    validate_currency_and_rate(currency, &exchange_rate)?;
 
     let mut tx = state.db.begin().await?;
 
@@ -430,8 +472,8 @@ pub async fn create_expense(
     query(
         r#"
         INSERT INTO expense (id, workspace_id, party_id, expense_date, description, reference,
-                             total_amount, currency, payment_method, status, paid_from_account_id)
-        VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, 'draft', $9)
+                             total_amount, currency, exchange_rate, payment_method, status, paid_from_account_id)
+        VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, $9, 'draft', $10)
         "#,
     )
     .bind(expense_id.0)
@@ -441,12 +483,13 @@ pub async fn create_expense(
     .bind(&payload.description)
     .bind(payload.reference.as_deref())
     .bind(currency)
+    .bind(&exchange_rate)
     .bind(payload.payment_method.as_deref())
     .bind(payload.paid_from_account_id.map(|a| a.0))
     .execute(&mut *tx)
     .await?;
 
-    let total = insert_expense_lines(&mut tx, expense_id, &payload.lines).await?;
+    let total = insert_expense_lines(&mut tx, expense_id, &payload.lines, &exchange_rate).await?;
 
     query(
         r#"
@@ -507,6 +550,12 @@ pub async fn update_expense(
     }
 
     let status = payload.status.as_ref().map(|s| s.as_str());
+    let currency = payload.currency.as_deref().unwrap_or(&existing.currency);
+    let exchange_rate = payload
+        .exchange_rate
+        .as_ref()
+        .unwrap_or(&existing.exchange_rate);
+    validate_currency_and_rate(currency, exchange_rate)?;
 
     let mut tx = state.db.begin().await?;
 
@@ -532,6 +581,7 @@ pub async fn update_expense(
             paid_from_account_id = COALESCE($8, paid_from_account_id),
             status = COALESCE($9, status),
             currency = COALESCE($10, currency),
+            exchange_rate = COALESCE($11, exchange_rate),
             updated_at = now()
         WHERE id = $1 AND workspace_id = $2
         "#,
@@ -546,15 +596,35 @@ pub async fn update_expense(
     .bind(payload.paid_from_account_id.map(|a| a.0))
     .bind(status)
     .bind(payload.currency.as_deref())
+    .bind(payload.exchange_rate.as_ref())
     .execute(&mut *tx)
     .await?;
+
+    // Recompute functional (MYR) line amounts when the exchange rate changes and no lines are supplied.
+    if payload.lines.is_none()
+        && payload.exchange_rate.is_some()
+        && payload.exchange_rate.as_ref() != Some(&existing.exchange_rate)
+    {
+        query(
+            r#"
+            UPDATE expense_line
+            SET amount = foreign_amount * $2,
+                updated_at = now()
+            WHERE expense_id = $1
+            "#,
+        )
+        .bind(id.0)
+        .bind(exchange_rate)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     let total = if let Some(lines) = payload.lines {
         query("DELETE FROM expense_line WHERE expense_id = $1")
             .bind(id.0)
             .execute(&mut *tx)
             .await?;
-        insert_expense_lines(&mut tx, id, &lines).await?
+        insert_expense_lines(&mut tx, id, &lines, exchange_rate).await?
     } else {
         existing.total_amount
     };
@@ -611,6 +681,12 @@ pub async fn post_expense(
         .map(|line| &line.amount)
         .fold(BigDecimal::zero(), |acc, x| acc + x);
 
+    let foreign_total: BigDecimal = expense
+        .lines
+        .iter()
+        .map(|line| &line.foreign_amount)
+        .fold(BigDecimal::zero(), |acc, x| acc + x);
+
     if total <= BigDecimal::zero() {
         return Err(ApiError::BadRequest(
             "Expense total must be greater than zero".to_string(),
@@ -665,8 +741,11 @@ pub async fn post_expense(
     for line in &expense.lines {
         query(
             r#"
-            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-            VALUES ($1, $2, $3, $4, $5, $6, 0)
+            INSERT INTO journal_line (
+                id, journal_entry_id, account_id, party_id, description,
+                debit, credit, foreign_debit, foreign_credit, exchange_rate
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8)
             "#,
         )
         .bind(JournalLineId::new().0)
@@ -675,14 +754,19 @@ pub async fn post_expense(
         .bind(expense.party_id.map(|p| p.0))
         .bind(format!("{} - Expense {}", line.description, reference))
         .bind(&line.amount)
+        .bind(&line.foreign_amount)
+        .bind(&expense.exchange_rate)
         .execute(&mut *tx)
         .await?;
     }
 
     query(
         r#"
-        INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-        VALUES ($1, $2, $3, $4, $5, 0, $6)
+        INSERT INTO journal_line (
+            id, journal_entry_id, account_id, party_id, description,
+            debit, credit, foreign_debit, foreign_credit, exchange_rate
+        )
+        VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8)
         "#,
     )
     .bind(JournalLineId::new().0)
@@ -691,6 +775,8 @@ pub async fn post_expense(
     .bind(expense.party_id.map(|p| p.0))
     .bind(format!("Credit - Expense {}", reference))
     .bind(&total)
+    .bind(&foreign_total)
+    .bind(&expense.exchange_rate)
     .execute(&mut *tx)
     .await?;
 
@@ -751,7 +837,8 @@ pub async fn cancel_expense(
 
     let rows = query(
         r#"
-        SELECT account_id, party_id, description, debit, credit
+        SELECT account_id, party_id, description, debit, credit,
+               foreign_debit, foreign_credit, exchange_rate
         FROM journal_line
         WHERE journal_entry_id = $1
         "#,
@@ -795,11 +882,17 @@ pub async fn cancel_expense(
         let description: String = row.try_get("description")?;
         let debit: BigDecimal = row.try_get("debit")?;
         let credit: BigDecimal = row.try_get("credit")?;
+        let foreign_debit: BigDecimal = row.try_get("foreign_debit")?;
+        let foreign_credit: BigDecimal = row.try_get("foreign_credit")?;
+        let exchange_rate: BigDecimal = row.try_get("exchange_rate")?;
 
         query(
             r#"
-            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO journal_line (
+                id, journal_entry_id, account_id, party_id, description,
+                debit, credit, foreign_debit, foreign_credit, exchange_rate
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(JournalLineId::new().0)
@@ -809,6 +902,9 @@ pub async fn cancel_expense(
         .bind(format!("{} - reversal", description))
         .bind(credit)
         .bind(debit)
+        .bind(foreign_credit)
+        .bind(foreign_debit)
+        .bind(exchange_rate)
         .execute(&mut *tx)
         .await?;
     }

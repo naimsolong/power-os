@@ -55,6 +55,7 @@ export interface PaymentAllocation {
   invoice_id?: string;
   bill_id?: string;
   amount: number;
+  foreign_amount: number;
 }
 
 export interface Payment {
@@ -64,7 +65,9 @@ export interface Payment {
   bank_account_id: string;
   payment_date: string;
   amount: number;
+  foreign_amount: number;
   currency: string;
+  exchange_rate: number;
   payment_method: PaymentMethod;
   reference?: string;
   notes?: string;
@@ -86,6 +89,7 @@ export interface PaymentCreate {
   payment_date: string;
   amount: number;
   currency?: string;
+  exchange_rate?: number;
   payment_method: PaymentMethod;
   reference?: string;
   notes?: string;

@@ -29,8 +29,10 @@ export interface JournalEntryFormLine {
   id: string;
   account_id: string;
   description: string;
-  debit: string;
-  credit: string;
+  currency: string;
+  exchange_rate: string;
+  foreign_debit: string;
+  foreign_credit: string;
 }
 
 interface JournalEntryFormProps {
@@ -46,13 +48,17 @@ interface JournalEntryFormProps {
   onDelete?: (id: string) => void;
 }
 
+const CURRENCY_OPTIONS = ["MYR", "USD", "EUR", "SGD"];
+
 function emptyLine(): JournalEntryFormLine {
   return {
     id: crypto.randomUUID(),
     account_id: "",
     description: "",
-    debit: "",
-    credit: "",
+    currency: "MYR",
+    exchange_rate: "1",
+    foreign_debit: "",
+    foreign_credit: "",
   };
 }
 
@@ -62,6 +68,12 @@ function parseMoney(value: string): string | null {
   const normalized = trimmed.replace(/,/g, "");
   if (!/^\d+(\.\d{0,4})?$/.test(normalized)) return null;
   return normalized;
+}
+
+function parseRate(value: string): number {
+  const trimmed = value.trim().replace(/,/g, "");
+  const num = Number(trimmed);
+  return Number.isNaN(num) || num <= 0 ? 1 : num;
 }
 
 function formatMoney(value: string): string {
@@ -77,8 +89,32 @@ function toLinePayload(line: JournalEntryFormLine): JournalLineCreate {
   return {
     account_id: line.account_id,
     description: line.description.trim() || null,
-    debit: parseMoney(line.debit),
-    credit: parseMoney(line.credit),
+    debit: parseMoney(line.foreign_debit),
+    credit: parseMoney(line.foreign_credit),
+    currency: line.currency || "MYR",
+    exchange_rate: line.currency === "MYR" ? "1" : parseMoney(line.exchange_rate),
+  };
+}
+
+function toFormLine(line: {
+  account_id: string;
+  description: string | null;
+  debit: string;
+  credit: string;
+  foreign_debit: string;
+  foreign_credit: string;
+  exchange_rate: string;
+}): JournalEntryFormLine {
+  const currency =
+    line.exchange_rate && Number(line.exchange_rate) !== 1 ? "USD" : "MYR";
+  return {
+    id: crypto.randomUUID(),
+    account_id: line.account_id,
+    description: line.description ?? "",
+    currency,
+    exchange_rate: line.exchange_rate || "1",
+    foreign_debit: line.foreign_debit || line.debit || "",
+    foreign_credit: line.foreign_credit || line.credit || "",
   };
 }
 
@@ -104,13 +140,17 @@ export function JournalEntryForm({
   const [description, setDescription] = useState(entry?.description ?? "");
   const [lines, setLines] = useState<JournalEntryFormLine[]>(() => {
     if (entry && entry.lines.length > 0) {
-      return entry.lines.map((line) => ({
-        id: crypto.randomUUID(),
-        account_id: line.account_id,
-        description: line.description ?? "",
-        debit: line.debit || "",
-        credit: line.credit || "",
-      }));
+      return entry.lines.map((line) =>
+        toFormLine({
+          account_id: line.account_id,
+          description: line.description,
+          debit: line.debit,
+          credit: line.credit,
+          foreign_debit: line.foreign_debit,
+          foreign_credit: line.foreign_credit,
+          exchange_rate: String(line.exchange_rate),
+        })
+      );
     }
     return [emptyLine(), emptyLine()];
   });
@@ -123,13 +163,17 @@ export function JournalEntryForm({
     setDescription(entry?.description ?? "");
     setLines(
       entry && entry.lines.length > 0
-        ? entry.lines.map((line) => ({
-            id: crypto.randomUUID(),
-            account_id: line.account_id,
-            description: line.description ?? "",
-            debit: line.debit || "",
-            credit: line.credit || "",
-          }))
+        ? entry.lines.map((line) =>
+            toFormLine({
+              account_id: line.account_id,
+              description: line.description,
+              debit: line.debit,
+              credit: line.credit,
+              foreign_debit: line.foreign_debit,
+              foreign_credit: line.foreign_credit,
+              exchange_rate: String(line.exchange_rate),
+            })
+          )
         : [emptyLine(), emptyLine()]
     );
     setLocalError(null);
@@ -140,21 +184,31 @@ export function JournalEntryForm({
     [accounts]
   );
 
-  const { totalDebit, totalCredit, isBalanced } = useMemo(() => {
-    let debit = 0;
-    let credit = 0;
-    for (const line of lines) {
-      const d = Number(parseMoney(line.debit) ?? 0);
-      const c = Number(parseMoney(line.credit) ?? 0);
-      debit += d;
-      credit += c;
-    }
-    return {
-      totalDebit: debit,
-      totalCredit: credit,
-      isBalanced: debit === credit && debit > 0,
-    };
-  }, [lines]);
+  const { totalForeignDebit, totalForeignCredit, totalMyrDebit, totalMyrCredit, isBalanced } =
+    useMemo(() => {
+      let foreignDebit = 0;
+      let foreignCredit = 0;
+      let myrDebit = 0;
+      let myrCredit = 0;
+      for (const line of lines) {
+        const fd = Number(parseMoney(line.foreign_debit) ?? 0);
+        const fc = Number(parseMoney(line.foreign_credit) ?? 0);
+        const rate = parseRate(line.exchange_rate);
+        foreignDebit += fd;
+        foreignCredit += fc;
+        myrDebit += fd * rate;
+        myrCredit += fc * rate;
+      }
+      const balanced =
+        Math.abs(myrDebit - myrCredit) < 0.0001 && myrDebit > 0;
+      return {
+        totalForeignDebit: foreignDebit,
+        totalForeignCredit: foreignCredit,
+        totalMyrDebit: myrDebit,
+        totalMyrCredit: myrCredit,
+        isBalanced: balanced,
+      };
+    }, [lines]);
 
   const updateLine = (
     id: string,
@@ -162,7 +216,14 @@ export function JournalEntryForm({
     value: string
   ) => {
     setLines((prev) =>
-      prev.map((line) => (line.id === id ? { ...line, [field]: value } : line))
+      prev.map((line) => {
+        if (line.id !== id) return line;
+        const next = { ...line, [field]: value };
+        if (field === "currency" && value === "MYR") {
+          next.exchange_rate = "1";
+        }
+        return next;
+      })
     );
     setLocalError(null);
   };
@@ -189,8 +250,6 @@ export function JournalEntryForm({
     }
 
     const payloadLines: JournalLineCreate[] = [];
-    let debitTotal = 0;
-    let creditTotal = 0;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -199,31 +258,39 @@ export function JournalEntryForm({
         return null;
       }
 
-      const debit = Number(parseMoney(line.debit) ?? 0);
-      const credit = Number(parseMoney(line.credit) ?? 0);
+      const foreignDebit = Number(parseMoney(line.foreign_debit) ?? 0);
+      const foreignCredit = Number(parseMoney(line.foreign_credit) ?? 0);
+      const rate = parseRate(line.exchange_rate);
 
-      if (debit > 0 && credit > 0) {
+      if (foreignDebit > 0 && foreignCredit > 0) {
         setLocalError(
           `Line ${i + 1}: a line cannot have both debit and credit.`
         );
         return null;
       }
 
-      if (debit === 0 && credit === 0) {
+      if (foreignDebit === 0 && foreignCredit === 0) {
         setLocalError(
           `Line ${i + 1}: a line must have either debit or credit greater than zero.`
         );
         return null;
       }
 
-      debitTotal += debit;
-      creditTotal += credit;
+      if (!CURRENCY_OPTIONS.includes(line.currency)) {
+        setLocalError(`Line ${i + 1}: unsupported currency.`);
+        return null;
+      }
+
+      if (line.currency === "MYR" && rate !== 1) {
+        setLocalError(`Line ${i + 1}: MYR lines must use exchange rate 1.`);
+        return null;
+      }
 
       payloadLines.push(toLinePayload(line));
     }
 
-    if (debitTotal !== creditTotal) {
-      setLocalError("Total debits must equal total credits.");
+    if (Math.abs(totalMyrDebit - totalMyrCredit) >= 0.0001) {
+      setLocalError("MYR debits must equal MYR credits.");
       return null;
     }
 
@@ -254,7 +321,7 @@ export function JournalEntryForm({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <Card className="w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+      <Card className="w-full max-w-5xl max-h-[90vh] overflow-y-auto">
         <CardHeader>
           <CardTitle>
             {isEditing
@@ -266,7 +333,7 @@ export function JournalEntryForm({
           <CardDescription>
             {isReadOnly
               ? "This journal entry is posted and cannot be edited."
-              : "Create a balanced double-entry journal."}
+              : "Create a balanced double-entry journal. Enter foreign amounts; MYR is computed using the exchange rate."}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -338,10 +405,12 @@ export function JournalEntryForm({
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-[240px]">Account</TableHead>
+                      <TableHead className="w-[200px]">Account</TableHead>
                       <TableHead>Description</TableHead>
-                      <TableHead className="w-[140px]">Debit</TableHead>
-                      <TableHead className="w-[140px]">Credit</TableHead>
+                      <TableHead className="w-[100px]">Currency</TableHead>
+                      <TableHead className="w-[120px]">Rate</TableHead>
+                      <TableHead className="w-[120px]">Foreign Debit</TableHead>
+                      <TableHead className="w-[120px]">Foreign Credit</TableHead>
                       {!isReadOnly && (
                         <TableHead className="w-[60px]"></TableHead>
                       )}
@@ -379,10 +448,38 @@ export function JournalEntryForm({
                           />
                         </TableCell>
                         <TableCell>
-                          <Input
-                            value={line.debit}
+                          <select
+                            value={line.currency}
                             onChange={(e) =>
-                              updateLine(line.id, "debit", e.target.value)
+                              updateLine(line.id, "currency", e.target.value)
+                            }
+                            disabled={isReadOnly || isSaving}
+                            className="flex h-9 w-full rounded-md border border-input bg-transparent px-2 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                            required
+                          >
+                            {CURRENCY_OPTIONS.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            value={line.exchange_rate}
+                            onChange={(e) =>
+                              updateLine(line.id, "exchange_rate", e.target.value)
+                            }
+                            placeholder="1"
+                            disabled={isReadOnly || isSaving || line.currency === "MYR"}
+                            inputMode="decimal"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            value={line.foreign_debit}
+                            onChange={(e) =>
+                              updateLine(line.id, "foreign_debit", e.target.value)
                             }
                             placeholder="0.00"
                             disabled={isReadOnly || isSaving}
@@ -391,9 +488,9 @@ export function JournalEntryForm({
                         </TableCell>
                         <TableCell>
                           <Input
-                            value={line.credit}
+                            value={line.foreign_credit}
                             onChange={(e) =>
-                              updateLine(line.id, "credit", e.target.value)
+                              updateLine(line.id, "foreign_credit", e.target.value)
                             }
                             placeholder="0.00"
                             disabled={isReadOnly || isSaving}
@@ -420,28 +517,46 @@ export function JournalEntryForm({
                 </Table>
               </div>
 
-              <div className="flex items-center justify-between rounded-md border bg-muted/50 px-4 py-2 text-sm">
-                <div className="flex gap-6">
-                  <span>
-                    Total Debit:{" "}
-                    <strong className="tabular-nums">
-                      {formatMoney(totalDebit.toString())}
-                    </strong>
-                  </span>
-                  <span>
-                    Total Credit:{" "}
-                    <strong className="tabular-nums">
-                      {formatMoney(totalCredit.toString())}
-                    </strong>
+              <div className="flex flex-col gap-2 rounded-md border bg-muted/50 px-4 py-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <div className="flex gap-6">
+                    <span>
+                      Total Foreign Debit:{" "}
+                      <strong className="tabular-nums">
+                        {formatMoney(totalForeignDebit.toString())}
+                      </strong>
+                    </span>
+                    <span>
+                      Total Foreign Credit:{" "}
+                      <strong className="tabular-nums">
+                        {formatMoney(totalForeignCredit.toString())}
+                      </strong>
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex gap-6">
+                    <span>
+                      Total MYR Debit:{" "}
+                      <strong className="tabular-nums">
+                        {formatMoney(totalMyrDebit.toString())}
+                      </strong>
+                    </span>
+                    <span>
+                      Total MYR Credit:{" "}
+                      <strong className="tabular-nums">
+                        {formatMoney(totalMyrCredit.toString())}
+                      </strong>
+                    </span>
+                  </div>
+                  <span
+                    className={
+                      isBalanced ? "text-green-600" : "text-destructive"
+                    }
+                  >
+                    {isBalanced ? "Balanced" : "Unbalanced"}
                   </span>
                 </div>
-                <span
-                  className={
-                    isBalanced ? "text-green-600" : "text-destructive"
-                  }
-                >
-                  {isBalanced ? "Balanced" : "Unbalanced"}
-                </span>
               </div>
             </div>
 

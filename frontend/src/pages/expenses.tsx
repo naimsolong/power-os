@@ -58,6 +58,7 @@ export function ExpensesPage() {
   const [paymentMethod, setPaymentMethod] = useState("");
   const [paidFromAccountId, setPaidFromAccountId] = useState("");
   const [currency, setCurrency] = useState("MYR");
+  const [exchangeRate, setExchangeRate] = useState(1);
   const [lines, setLines] = useState<ExpenseLineForm[]>([emptyLine()]);
 
   const { data: expenses, isLoading, error } = useExpenses(search);
@@ -95,11 +96,12 @@ export function ExpensesPage() {
       setPaymentMethod(selectedExpense.payment_method ?? "");
       setPaidFromAccountId(selectedExpense.paid_from_account_id ?? "");
       setCurrency(selectedExpense.currency || "MYR");
+      setExchangeRate(selectedExpense.exchange_rate ?? 1);
       setLines(
         selectedExpense.lines?.map((line) => ({
           description: line.description,
           account_id: line.account_id,
-          amount: String(line.amount),
+          amount: String(line.foreign_amount ?? line.amount),
         })) ?? [emptyLine()]
       );
     }
@@ -113,6 +115,7 @@ export function ExpensesPage() {
     setPaymentMethod("");
     setPaidFromAccountId("");
     setCurrency("MYR");
+    setExchangeRate(1);
     setLines([emptyLine()]);
   };
 
@@ -170,6 +173,7 @@ export function ExpensesPage() {
     payment_method: paymentMethod || undefined,
     paid_from_account_id: paidFromAccountId || undefined,
     currency,
+    exchange_rate: exchangeRate,
     lines: lines
       .filter((line) => line.description.trim() && line.account_id)
       .map(
@@ -414,10 +418,30 @@ export function ExpensesPage() {
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Currency</label>
-                <Input
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                   value={currency}
-                  onChange={(e) => setCurrency(e.target.value)}
-                  placeholder="MYR"
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setCurrency(value);
+                    if (value === "MYR") setExchangeRate(1);
+                  }}
+                >
+                  <option value="MYR">MYR</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                  <option value="SGD">SGD</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Exchange Rate</label>
+                <Input
+                  type="number"
+                  min="0.000001"
+                  step="0.000001"
+                  value={exchangeRate}
+                  onChange={(e) => setExchangeRate(Number(e.target.value))}
+                  disabled={currency === "MYR"}
                 />
               </div>
             </div>
@@ -436,7 +460,7 @@ export function ExpensesPage() {
                 <Input
                   value={reference}
                   onChange={(e) => setReference(e.target.value)}
-                  placeholder="Receipt or transaction reference"
+                  placeholder="Reference number"
                 />
               </div>
             </div>

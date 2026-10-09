@@ -7,7 +7,7 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
-use bigdecimal::{BigDecimal, Zero};
+use bigdecimal::{BigDecimal, One, Zero};
 use power_os_domain::{
     AccountId, InvoiceId, InvoiceLineId, JournalEntryId, JournalLineId, PartyId, WorkspaceId,
 };
@@ -45,6 +45,34 @@ impl InvoiceStatus {
     }
 }
 
+fn supported_currency(currency: &str) -> bool {
+    matches!(currency, "MYR" | "USD" | "EUR" | "SGD")
+}
+
+fn normalize_rate(value: Option<&BigDecimal>) -> BigDecimal {
+    value.cloned().unwrap_or_else(BigDecimal::one)
+}
+
+fn validate_currency_and_rate(currency: &str, rate: &BigDecimal) -> Result<(), ApiError> {
+    if !supported_currency(currency) {
+        return Err(ApiError::BadRequest(format!(
+            "Unsupported currency: {}. Supported: MYR, USD, EUR, SGD",
+            currency
+        )));
+    }
+    if rate <= &BigDecimal::zero() {
+        return Err(ApiError::BadRequest(
+            "Exchange rate must be greater than zero".to_string(),
+        ));
+    }
+    if currency == "MYR" && rate != &BigDecimal::one() {
+        return Err(ApiError::BadRequest(
+            "MYR transactions must use exchange rate 1".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Validate)]
 pub struct CreateInvoiceRequest {
     pub party_id: PartyId,
@@ -53,6 +81,7 @@ pub struct CreateInvoiceRequest {
     pub issue_date: Date,
     pub due_date: Option<Date>,
     pub currency: Option<String>,
+    pub exchange_rate: Option<BigDecimal>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -64,6 +93,7 @@ pub struct UpdateInvoiceRequest {
     pub due_date: Option<Date>,
     pub status: Option<InvoiceStatus>,
     pub currency: Option<String>,
+    pub exchange_rate: Option<BigDecimal>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +113,7 @@ pub struct InvoiceResponse {
     pub status: String,
     pub total_amount: BigDecimal,
     pub currency: String,
+    pub exchange_rate: BigDecimal,
     pub lhdn_status: Option<String>,
     pub lhdn_uuid: Option<String>,
     pub lhdn_error: Option<String>,
@@ -99,6 +130,7 @@ pub struct InvoiceDetailResponse {
     pub status: String,
     pub total_amount: BigDecimal,
     pub currency: String,
+    pub exchange_rate: BigDecimal,
     pub lines: Vec<InvoiceLineResponse>,
 }
 
@@ -126,6 +158,8 @@ pub struct InvoiceLineResponse {
     pub quantity: BigDecimal,
     pub unit_price: BigDecimal,
     pub line_total: BigDecimal,
+    pub foreign_unit_price: BigDecimal,
+    pub foreign_amount: BigDecimal,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +185,7 @@ fn map_invoice_row(row: &sqlx::postgres::PgRow) -> Result<InvoiceResponse, sqlx:
         status: row.try_get("status")?,
         total_amount: row.try_get("total_amount")?,
         currency: row.try_get("currency")?,
+        exchange_rate: row.try_get("exchange_rate")?,
         lhdn_status: row.try_get("lhdn_status")?,
         lhdn_uuid: row.try_get("lhdn_uuid")?,
         lhdn_error: row.try_get("lhdn_error")?,
@@ -165,6 +200,8 @@ fn map_invoice_line_row(row: &sqlx::postgres::PgRow) -> Result<InvoiceLineRespon
         quantity: row.try_get("quantity")?,
         unit_price: row.try_get("unit_price")?,
         line_total: row.try_get("line_total")?,
+        foreign_unit_price: row.try_get("foreign_unit_price")?,
+        foreign_amount: row.try_get("foreign_amount")?,
     })
 }
 
@@ -221,7 +258,7 @@ async fn fetch_invoice(
         r#"
         SELECT
             i.id, i.workspace_id, i.party_id, i.invoice_number, i.issue_date,
-            i.due_date, i.status, i.total_amount, i.currency,
+            i.due_date, i.status, i.total_amount, i.currency, i.exchange_rate,
             s.status AS lhdn_status,
             s.lhdn_uuid,
             s.error_message AS lhdn_error
@@ -253,7 +290,8 @@ async fn fetch_invoice_lines(
 ) -> Result<Vec<InvoiceLineResponse>, ApiError> {
     let rows = query(
         r#"
-        SELECT id, invoice_id, description, quantity, unit_price, line_total
+        SELECT id, invoice_id, description, quantity, unit_price, line_total,
+               foreign_unit_price, foreign_amount
         FROM invoice_line
         WHERE invoice_id = $1
         ORDER BY created_at ASC
@@ -291,6 +329,7 @@ pub(crate) async fn fetch_invoice_detail(
         status: invoice.status,
         total_amount: invoice.total_amount,
         currency: invoice.currency,
+        exchange_rate: invoice.exchange_rate,
         lines,
     }))
 }
@@ -306,7 +345,7 @@ pub async fn list_invoices(
         r#"
         SELECT
             i.id, i.workspace_id, i.party_id, i.invoice_number, i.issue_date,
-            i.due_date, i.status, i.total_amount, i.currency,
+            i.due_date, i.status, i.total_amount, i.currency, i.exchange_rate,
             s.status AS lhdn_status,
             s.lhdn_uuid,
             s.error_message AS lhdn_error
@@ -349,12 +388,14 @@ pub async fn create_invoice(
 
     let invoice_id = InvoiceId::new();
     let currency = payload.currency.as_deref().unwrap_or("MYR");
+    let exchange_rate = normalize_rate(payload.exchange_rate.as_ref());
+    validate_currency_and_rate(currency, &exchange_rate)?;
 
     let row = query(
         r#"
-        INSERT INTO invoice (id, workspace_id, party_id, invoice_number, issue_date, due_date, status, total_amount, currency)
-        VALUES ($1, $2, $3, $4, $5, $6, 'draft', 0, $7)
-        RETURNING id, workspace_id, party_id, invoice_number, issue_date, due_date, status, total_amount, currency,
+        INSERT INTO invoice (id, workspace_id, party_id, invoice_number, issue_date, due_date, status, total_amount, currency, exchange_rate)
+        VALUES ($1, $2, $3, $4, $5, $6, 'draft', 0, $7, $8)
+        RETURNING id, workspace_id, party_id, invoice_number, issue_date, due_date, status, total_amount, currency, exchange_rate,
                   NULL::text AS lhdn_status, NULL::text AS lhdn_uuid, NULL::text AS lhdn_error
         "#,
     )
@@ -365,6 +406,7 @@ pub async fn create_invoice(
     .bind(payload.issue_date)
     .bind(payload.due_date)
     .bind(currency)
+    .bind(&exchange_rate)
     .fetch_one(&state.db)
     .await?;
 
@@ -392,15 +434,24 @@ pub async fn update_invoice(
     payload.validate()?;
 
     let existing = fetch_invoice(&state.db, id, auth_user.workspace_id).await?;
-    if existing.is_none() {
-        return Err(ApiError::NotFound);
-    }
+    let existing = match existing {
+        Some(inv) => inv,
+        None => return Err(ApiError::NotFound),
+    };
 
     if let Some(party_id) = payload.party_id {
         ensure_party_in_workspace(&state.db, party_id, auth_user.workspace_id).await?;
     }
 
     let status = payload.status.as_ref().map(|s| s.as_str());
+    let currency = payload.currency.as_deref().unwrap_or(&existing.currency);
+    let exchange_rate = payload
+        .exchange_rate
+        .as_ref()
+        .unwrap_or(&existing.exchange_rate);
+    validate_currency_and_rate(currency, exchange_rate)?;
+
+    let mut tx = state.db.begin().await?;
 
     query(
         r#"
@@ -412,6 +463,7 @@ pub async fn update_invoice(
             due_date = COALESCE($6, due_date),
             status = COALESCE($7, status),
             currency = COALESCE($8, currency),
+            exchange_rate = COALESCE($9, exchange_rate),
             updated_at = now()
         WHERE id = $1 AND workspace_id = $2
         "#,
@@ -424,8 +476,30 @@ pub async fn update_invoice(
     .bind(payload.due_date)
     .bind(status)
     .bind(payload.currency.as_deref())
-    .execute(&state.db)
+    .bind(payload.exchange_rate.as_ref())
+    .execute(&mut *tx)
     .await?;
+
+    // Recompute functional (MYR) line amounts when the exchange rate changes.
+    if payload.exchange_rate.is_some()
+        && payload.exchange_rate.as_ref() != Some(&existing.exchange_rate)
+    {
+        query(
+            r#"
+            UPDATE invoice_line
+            SET unit_price = foreign_unit_price * $2,
+                line_total = foreign_amount * $2,
+                updated_at = now()
+            WHERE invoice_id = $1
+            "#,
+        )
+        .bind(id.0)
+        .bind(exchange_rate)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
 
     let invoice = fetch_invoice_detail(&state.db, id, auth_user.workspace_id)
         .await?
@@ -475,26 +549,37 @@ pub async fn create_invoice_line(
     payload.validate()?;
 
     let invoice = fetch_invoice(&state.db, id, auth_user.workspace_id).await?;
-    if invoice.is_none() {
-        return Err(ApiError::NotFound);
-    }
+    let invoice = match invoice {
+        Some(inv) => inv,
+        None => return Err(ApiError::NotFound),
+    };
 
-    let line_total = &payload.quantity * &payload.unit_price;
+    // The request unit_price is the foreign-currency unit price.
+    let foreign_unit_price = &payload.unit_price;
+    let foreign_amount = &payload.quantity * foreign_unit_price;
+    let myr_unit_price = foreign_unit_price * &invoice.exchange_rate;
+    let myr_line_total = &foreign_amount * &invoice.exchange_rate;
     let line_id = InvoiceLineId::new();
 
     let row = query(
         r#"
-        INSERT INTO invoice_line (id, invoice_id, description, quantity, unit_price, line_total)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, invoice_id, description, quantity, unit_price, line_total
+        INSERT INTO invoice_line (
+            id, invoice_id, description, quantity, unit_price, line_total,
+            foreign_unit_price, foreign_amount
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, invoice_id, description, quantity, unit_price, line_total,
+                 foreign_unit_price, foreign_amount
         "#,
     )
     .bind(line_id.0)
     .bind(id.0)
     .bind(&payload.description)
     .bind(&payload.quantity)
-    .bind(&payload.unit_price)
-    .bind(&line_total)
+    .bind(&myr_unit_price)
+    .bind(&myr_line_total)
+    .bind(&foreign_unit_price)
+    .bind(&foreign_amount)
     .fetch_one(&state.db)
     .await?;
 
@@ -509,30 +594,33 @@ pub async fn update_invoice_line(
 ) -> Result<(StatusCode, Json<InvoiceLineResponse>), ApiError> {
     payload.validate()?;
 
-    let invoice_exists = fetch_invoice(&state.db, id, auth_user.workspace_id).await?;
-    if invoice_exists.is_none() {
-        return Err(ApiError::NotFound);
-    }
+    let invoice = fetch_invoice(&state.db, id, auth_user.workspace_id).await?;
+    let invoice = match invoice {
+        Some(inv) => inv,
+        None => return Err(ApiError::NotFound),
+    };
 
     let existing =
-        query("SELECT quantity, unit_price FROM invoice_line WHERE id = $1 AND invoice_id = $2")
+        query("SELECT quantity, foreign_unit_price FROM invoice_line WHERE id = $1 AND invoice_id = $2")
             .bind(line_id.0)
             .bind(id.0)
             .fetch_optional(&state.db)
             .await?;
 
-    let (quantity, unit_price) = match existing {
+    let (quantity, foreign_unit_price) = match existing {
         Some(row) => {
             let q: BigDecimal = row.try_get("quantity")?;
-            let p: BigDecimal = row.try_get("unit_price")?;
+            let p: BigDecimal = row.try_get("foreign_unit_price")?;
             (q, p)
         }
         None => return Err(ApiError::NotFound),
     };
 
     let quantity = payload.quantity.as_ref().unwrap_or(&quantity);
-    let unit_price = payload.unit_price.as_ref().unwrap_or(&unit_price);
-    let line_total = quantity * unit_price;
+    let foreign_unit_price = payload.unit_price.as_ref().unwrap_or(&foreign_unit_price);
+    let foreign_amount = quantity * foreign_unit_price;
+    let myr_unit_price = foreign_unit_price * &invoice.exchange_rate;
+    let myr_line_total = &foreign_amount * &invoice.exchange_rate;
 
     let row = query(
         r#"
@@ -540,19 +628,24 @@ pub async fn update_invoice_line(
         SET
             description = COALESCE($3, description),
             quantity = COALESCE($4, quantity),
-            unit_price = COALESCE($5, unit_price),
+            unit_price = $5,
             line_total = $6,
+            foreign_unit_price = COALESCE($7, foreign_unit_price),
+            foreign_amount = $8,
             updated_at = now()
         WHERE id = $1 AND invoice_id = $2
-        RETURNING id, invoice_id, description, quantity, unit_price, line_total
+        RETURNING id, invoice_id, description, quantity, unit_price, line_total,
+                 foreign_unit_price, foreign_amount
         "#,
     )
     .bind(line_id.0)
     .bind(id.0)
     .bind(payload.description.as_deref())
     .bind(payload.quantity.as_ref())
+    .bind(&myr_unit_price)
+    .bind(&myr_line_total)
     .bind(payload.unit_price.as_ref())
-    .bind(&line_total)
+    .bind(&foreign_amount)
     .fetch_one(&state.db)
     .await?;
 
@@ -667,6 +760,12 @@ pub async fn post_invoice(
         .map(|line| &line.line_total)
         .fold(BigDecimal::zero(), |acc, x| acc + x);
 
+    let foreign_total: BigDecimal = invoice
+        .lines
+        .iter()
+        .map(|line| &line.foreign_amount)
+        .fold(BigDecimal::zero(), |acc, x| acc + x);
+
     if total <= BigDecimal::zero() {
         return Err(ApiError::BadRequest(
             "Invoice total must be greater than zero".to_string(),
@@ -739,8 +838,11 @@ pub async fn post_invoice(
 
     query(
         r#"
-        INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-        VALUES ($1, $2, $3, $4, $5, $6, 0)
+        INSERT INTO journal_line (
+            id, journal_entry_id, account_id, party_id, description,
+            debit, credit, foreign_debit, foreign_credit, exchange_rate
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8)
         "#,
     )
     .bind(JournalLineId::new().0)
@@ -749,13 +851,18 @@ pub async fn post_invoice(
     .bind(invoice.party_id.0)
     .bind(format!("Accounts Receivable - Invoice {}", invoice.invoice_number))
     .bind(&total)
+    .bind(&foreign_total)
+    .bind(&invoice.exchange_rate)
     .execute(&mut *tx)
     .await?;
 
     query(
         r#"
-        INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-        VALUES ($1, $2, $3, $4, $5, 0, $6)
+        INSERT INTO journal_line (
+            id, journal_entry_id, account_id, party_id, description,
+            debit, credit, foreign_debit, foreign_credit, exchange_rate
+        )
+        VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8)
         "#,
     )
     .bind(JournalLineId::new().0)
@@ -764,6 +871,8 @@ pub async fn post_invoice(
     .bind(invoice.party_id.0)
     .bind(format!("Revenue - Invoice {}", invoice.invoice_number))
     .bind(&total)
+    .bind(&foreign_total)
+    .bind(&invoice.exchange_rate)
     .execute(&mut *tx)
     .await?;
 

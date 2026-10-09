@@ -31,6 +31,10 @@ export interface JournalLine {
   description: string | null;
   debit: string;
   credit: string;
+  foreign_debit: string;
+  foreign_credit: string;
+  exchange_rate: number;
+  currency: string;
 }
 
 export interface JournalEntry {
@@ -54,6 +58,8 @@ export interface JournalLineCreate {
   description?: string | null;
   debit?: string | null;
   credit?: string | null;
+  currency?: string | null;
+  exchange_rate?: string | null;
 }
 
 export interface JournalEntryCreate {

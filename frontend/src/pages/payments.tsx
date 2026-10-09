@@ -59,6 +59,7 @@ export function PaymentsPage() {
   const [paymentDate, setPaymentDate] = useState("");
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState("MYR");
+  const [exchangeRate, setExchangeRate] = useState(1);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("bank_transfer");
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
@@ -107,8 +108,9 @@ export function PaymentsPage() {
       setPartyId(selectedPayment.party_id);
       setBankAccountId(selectedPayment.bank_account_id);
       setPaymentDate(selectedPayment.payment_date.slice(0, 10));
-      setAmount(String(selectedPayment.amount));
+      setAmount(String(selectedPayment.foreign_amount || selectedPayment.amount));
       setCurrency(selectedPayment.currency || "MYR");
+      setExchangeRate(selectedPayment.exchange_rate ?? 1);
       setPaymentMethod(selectedPayment.payment_method);
       setReference(selectedPayment.reference ?? "");
       setNotes(selectedPayment.notes ?? "");
@@ -117,7 +119,7 @@ export function PaymentsPage() {
         selectedPayment.allocations?.map((a) => ({
           invoice_id: a.invoice_id,
           bill_id: a.bill_id,
-          amount: String(a.amount),
+          amount: String(a.foreign_amount ?? a.amount),
         })) ?? [emptyAllocation()]
       );
     }
@@ -129,6 +131,7 @@ export function PaymentsPage() {
     setPaymentDate("");
     setAmount("");
     setCurrency("MYR");
+    setExchangeRate(1);
     setPaymentMethod("bank_transfer");
     setReference("");
     setNotes("");
@@ -227,6 +230,7 @@ export function PaymentsPage() {
       payment_date: paymentDate,
       amount: paymentAmount,
       currency,
+      exchange_rate: exchangeRate,
       payment_method: paymentMethod,
       reference: reference || undefined,
       notes: notes || undefined,
@@ -389,7 +393,12 @@ export function PaymentsPage() {
                     {PAYMENT_DIRECTION_LABELS[payment.direction]}
                   </TableCell>
                   <TableCell>
-                    {formatCurrency(payment.amount, payment.currency)}
+                    {formatCurrency(payment.foreign_amount, payment.currency)}
+                    {payment.currency !== "MYR" && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        ≈ {formatCurrency(payment.amount, "MYR")}
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="capitalize">
                     {PAYMENT_STATUS_LABELS[payment.status]}
@@ -522,10 +531,30 @@ export function PaymentsPage() {
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Currency</label>
-                <Input
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                   value={currency}
-                  onChange={(e) => setCurrency(e.target.value)}
-                  placeholder="MYR"
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setCurrency(value);
+                    if (value === "MYR") setExchangeRate(1);
+                  }}
+                >
+                  <option value="MYR">MYR</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                  <option value="SGD">SGD</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Exchange Rate</label>
+                <Input
+                  type="number"
+                  min="0.000001"
+                  step="0.000001"
+                  value={exchangeRate}
+                  onChange={(e) => setExchangeRate(Number(e.target.value))}
+                  disabled={currency === "MYR"}
                 />
               </div>
               <div className="space-y-2">

@@ -36,6 +36,7 @@ export interface ExpenseLine {
   description: string;
   account_id: string;
   amount: number;
+  foreign_amount: number;
 }
 
 export interface Expense {
@@ -47,6 +48,7 @@ export interface Expense {
   reference: string | null;
   total_amount: number;
   currency: string;
+  exchange_rate: number;
   payment_method: string | null;
   status: ExpenseStatus;
   paid_from_account_id: string | null;
@@ -68,6 +70,7 @@ export interface ExpenseCreate {
   payment_method?: string;
   paid_from_account_id?: string;
   currency?: string;
+  exchange_rate?: number;
   lines: ExpenseLineCreate[];
 }
 

@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use bigdecimal::{BigDecimal, Zero};
+use bigdecimal::{BigDecimal, One, Zero};
 use power_os_domain::{AccountId, JournalEntryId, JournalLineId, PartyId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use sqlx::{query, Row};
@@ -43,6 +43,8 @@ pub struct CreateJournalLineRequest {
     pub description: Option<String>,
     pub debit: Option<BigDecimal>,
     pub credit: Option<BigDecimal>,
+    pub currency: Option<String>,
+    pub exchange_rate: Option<BigDecimal>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -79,6 +81,10 @@ pub struct JournalLineResponse {
     pub description: Option<String>,
     pub debit: BigDecimal,
     pub credit: BigDecimal,
+    pub foreign_debit: BigDecimal,
+    pub foreign_credit: BigDecimal,
+    pub exchange_rate: BigDecimal,
+    pub currency: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,6 +125,10 @@ fn map_journal_line_row(row: &sqlx::postgres::PgRow) -> Result<JournalLineRespon
         description: row.try_get("description")?,
         debit: row.try_get("debit")?,
         credit: row.try_get("credit")?,
+        foreign_debit: row.try_get("foreign_debit")?,
+        foreign_credit: row.try_get("foreign_credit")?,
+        exchange_rate: row.try_get("exchange_rate")?,
+        currency: row.try_get("currency")?,
     })
 }
 
@@ -179,30 +189,106 @@ fn normalize_amount(value: Option<&BigDecimal>) -> BigDecimal {
     value.cloned().unwrap_or_else(BigDecimal::zero)
 }
 
-trait JournalLineLike {
-    fn debit(&self) -> BigDecimal;
-    fn credit(&self) -> BigDecimal;
+fn normalize_rate(value: Option<&BigDecimal>) -> BigDecimal {
+    value.cloned().unwrap_or_else(BigDecimal::one)
 }
 
-impl JournalLineLike for CreateJournalLineRequest {
-    fn debit(&self) -> BigDecimal {
-        self.debit.clone().unwrap_or_else(BigDecimal::zero)
-    }
-    fn credit(&self) -> BigDecimal {
-        self.credit.clone().unwrap_or_else(BigDecimal::zero)
-    }
+fn supported_currency(currency: &str) -> bool {
+    matches!(currency, "MYR" | "USD" | "EUR" | "SGD")
 }
 
-impl JournalLineLike for JournalLineResponse {
-    fn debit(&self) -> BigDecimal {
-        self.debit.clone()
+fn validate_currency_and_rate(currency: &str, rate: &BigDecimal) -> Result<(), ApiError> {
+    if !supported_currency(currency) {
+        return Err(ApiError::BadRequest(format!(
+            "Unsupported currency: {}. Supported: MYR, USD, EUR, SGD",
+            currency
+        )));
     }
-    fn credit(&self) -> BigDecimal {
-        self.credit.clone()
+    if rate <= &BigDecimal::zero() {
+        return Err(ApiError::BadRequest(
+            "Exchange rate must be greater than zero".to_string(),
+        ));
     }
+    if currency == "MYR" && rate != &BigDecimal::one() {
+        return Err(ApiError::BadRequest(
+            "MYR transactions must use exchange rate 1".to_string(),
+        ));
+    }
+    Ok(())
 }
 
-fn validate_lines<L: JournalLineLike>(lines: &[L]) -> Result<(BigDecimal, BigDecimal), ApiError> {
+fn compute_myr_amount(foreign: &BigDecimal, rate: &BigDecimal) -> BigDecimal {
+    foreign * rate
+}
+
+fn validate_request_lines(
+    lines: &[CreateJournalLineRequest],
+) -> Result<(BigDecimal, BigDecimal, BigDecimal, BigDecimal), ApiError> {
+    if lines.len() < 2 {
+        return Err(ApiError::BadRequest(
+            "At least two journal lines are required".to_string(),
+        ));
+    }
+
+    let zero = BigDecimal::zero();
+    let mut total_foreign_debit = BigDecimal::zero();
+    let mut total_foreign_credit = BigDecimal::zero();
+    let mut total_myr_debit = BigDecimal::zero();
+    let mut total_myr_credit = BigDecimal::zero();
+
+    for (idx, line) in lines.iter().enumerate() {
+        let currency = line.currency.as_deref().unwrap_or("MYR");
+        let rate = normalize_rate(line.exchange_rate.as_ref());
+        validate_currency_and_rate(currency, &rate)?;
+
+        let foreign_debit = normalize_amount(line.debit.as_ref());
+        let foreign_credit = normalize_amount(line.credit.as_ref());
+
+        if foreign_debit < zero || foreign_credit < zero {
+            return Err(ApiError::BadRequest(format!(
+                "Line {}: debit and credit must be non-negative",
+                idx + 1
+            )));
+        }
+
+        if foreign_debit > zero && foreign_credit > zero {
+            return Err(ApiError::BadRequest(format!(
+                "Line {}: a line cannot have both debit and credit",
+                idx + 1
+            )));
+        }
+
+        if foreign_debit == zero && foreign_credit == zero {
+            return Err(ApiError::BadRequest(format!(
+                "Line {}: a line must have either debit or credit greater than zero",
+                idx + 1
+            )));
+        }
+
+        let myr_debit = compute_myr_amount(&foreign_debit, &rate);
+        let myr_credit = compute_myr_amount(&foreign_credit, &rate);
+
+        total_foreign_debit += foreign_debit;
+        total_foreign_credit += foreign_credit;
+        total_myr_debit += myr_debit;
+        total_myr_credit += myr_credit;
+    }
+
+    if total_myr_debit != total_myr_credit {
+        return Err(ApiError::BadRequest(
+            "Journal entry debits must equal credits".to_string(),
+        ));
+    }
+
+    Ok((
+        total_foreign_debit,
+        total_foreign_credit,
+        total_myr_debit,
+        total_myr_credit,
+    ))
+}
+
+fn validate_myr_balance(lines: &[JournalLineResponse]) -> Result<(), ApiError> {
     if lines.len() < 2 {
         return Err(ApiError::BadRequest(
             "At least two journal lines are required".to_string(),
@@ -214,32 +300,29 @@ fn validate_lines<L: JournalLineLike>(lines: &[L]) -> Result<(BigDecimal, BigDec
     let mut total_credit = BigDecimal::zero();
 
     for (idx, line) in lines.iter().enumerate() {
-        let debit = line.debit();
-        let credit = line.credit();
-
-        if debit < zero || credit < zero {
+        if line.debit < zero || line.credit < zero {
             return Err(ApiError::BadRequest(format!(
                 "Line {}: debit and credit must be non-negative",
                 idx + 1
             )));
         }
 
-        if debit > zero && credit > zero {
+        if line.debit > zero && line.credit > zero {
             return Err(ApiError::BadRequest(format!(
                 "Line {}: a line cannot have both debit and credit",
                 idx + 1
             )));
         }
 
-        if debit == zero && credit == zero {
+        if line.debit == zero && line.credit == zero {
             return Err(ApiError::BadRequest(format!(
                 "Line {}: a line must have either debit or credit greater than zero",
                 idx + 1
             )));
         }
 
-        total_debit += debit;
-        total_credit += credit;
+        total_debit += &line.debit;
+        total_credit += &line.credit;
     }
 
     if total_debit != total_credit {
@@ -248,7 +331,7 @@ fn validate_lines<L: JournalLineLike>(lines: &[L]) -> Result<(BigDecimal, BigDec
         ));
     }
 
-    Ok((total_debit, total_credit))
+    Ok(())
 }
 
 async fn validate_lines_accounts(
@@ -271,13 +354,22 @@ async fn insert_journal_lines(
     lines: &[CreateJournalLineRequest],
 ) -> Result<(), ApiError> {
     for line in lines {
-        let debit = normalize_amount(line.debit.as_ref());
-        let credit = normalize_amount(line.credit.as_ref());
+        let currency = line.currency.as_deref().unwrap_or("MYR");
+        let rate = normalize_rate(line.exchange_rate.as_ref());
+        validate_currency_and_rate(currency, &rate)?;
+
+        let foreign_debit = normalize_amount(line.debit.as_ref());
+        let foreign_credit = normalize_amount(line.credit.as_ref());
+        let myr_debit = compute_myr_amount(&foreign_debit, &rate);
+        let myr_credit = compute_myr_amount(&foreign_credit, &rate);
 
         query(
             r#"
-            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO journal_line (
+                id, journal_entry_id, account_id, party_id, description,
+                debit, credit, foreign_debit, foreign_credit, exchange_rate, currency
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(JournalLineId::new().0)
@@ -285,8 +377,12 @@ async fn insert_journal_lines(
         .bind(line.account_id.0)
         .bind(line.party_id.map(|p| p.0))
         .bind(line.description.as_deref())
-        .bind(&debit)
-        .bind(&credit)
+        .bind(&myr_debit)
+        .bind(&myr_credit)
+        .bind(&foreign_debit)
+        .bind(&foreign_credit)
+        .bind(&rate)
+        .bind(currency)
         .execute(&mut **tx)
         .await?;
     }
@@ -328,7 +424,8 @@ async fn fetch_journal_lines(
 ) -> Result<Vec<JournalLineResponse>, ApiError> {
     let rows = query(
         r#"
-        SELECT id, journal_entry_id, account_id, party_id, description, debit, credit
+        SELECT id, journal_entry_id, account_id, party_id, description, debit, credit,
+               foreign_debit, foreign_credit, exchange_rate, currency
         FROM journal_line
         WHERE journal_entry_id = $1
         ORDER BY created_at ASC
@@ -386,7 +483,7 @@ pub async fn create_journal_entry(
 ) -> Result<(StatusCode, Json<JournalEntryResponse>), ApiError> {
     payload.validate()?;
 
-    validate_lines(&payload.lines)?;
+    validate_request_lines(&payload.lines)?;
     validate_lines_accounts(&state.db, &payload.lines, auth_user.workspace_id).await?;
 
     let status = payload
@@ -457,7 +554,7 @@ pub async fn update_journal_entry(
     }
 
     if let Some(ref lines) = payload.lines {
-        validate_lines(lines)?;
+        validate_request_lines(lines)?;
         validate_lines_accounts(&state.db, lines, auth_user.workspace_id).await?;
     }
 
@@ -551,7 +648,7 @@ pub async fn post_journal_entry(
         ));
     }
 
-    validate_lines(&existing.lines)?;
+    validate_myr_balance(&existing.lines)?;
 
     query(
         r#"
@@ -632,8 +729,11 @@ pub async fn cancel_journal_entry(
     for line in &original.lines {
         query(
             r#"
-            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO journal_line (
+                id, journal_entry_id, account_id, party_id, description,
+                debit, credit, foreign_debit, foreign_credit, exchange_rate, currency
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
         )
         .bind(JournalLineId::new().0)
@@ -643,6 +743,10 @@ pub async fn cancel_journal_entry(
         .bind(line.description.as_deref().map(|d| format!("Reversal - {}", d)))
         .bind(&line.credit)
         .bind(&line.debit)
+        .bind(&line.foreign_credit)
+        .bind(&line.foreign_debit)
+        .bind(&line.exchange_rate)
+        .bind(&line.currency)
         .execute(&mut *tx)
         .await?;
     }

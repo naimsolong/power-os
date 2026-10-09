@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use bigdecimal::{BigDecimal, Zero};
+use bigdecimal::{BigDecimal, One, Zero};
 use power_os_domain::{
     AccountId, BillId, BillLineId, JournalEntryId, JournalLineId, PartyId, WorkspaceId,
 };
@@ -44,6 +44,34 @@ impl BillStatus {
     }
 }
 
+fn supported_currency(currency: &str) -> bool {
+    matches!(currency, "MYR" | "USD" | "EUR" | "SGD")
+}
+
+fn normalize_rate(value: Option<&BigDecimal>) -> BigDecimal {
+    value.cloned().unwrap_or_else(BigDecimal::one)
+}
+
+fn validate_currency_and_rate(currency: &str, rate: &BigDecimal) -> Result<(), ApiError> {
+    if !supported_currency(currency) {
+        return Err(ApiError::BadRequest(format!(
+            "Unsupported currency: {}. Supported: MYR, USD, EUR, SGD",
+            currency
+        )));
+    }
+    if rate <= &BigDecimal::zero() {
+        return Err(ApiError::BadRequest(
+            "Exchange rate must be greater than zero".to_string(),
+        ));
+    }
+    if currency == "MYR" && rate != &BigDecimal::one() {
+        return Err(ApiError::BadRequest(
+            "MYR transactions must use exchange rate 1".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Validate)]
 pub struct CreateBillLineRequest {
     #[validate(length(min = 1, message = "Description is required"))]
@@ -61,6 +89,7 @@ pub struct CreateBillRequest {
     pub issue_date: Date,
     pub due_date: Option<Date>,
     pub currency: Option<String>,
+    pub exchange_rate: Option<BigDecimal>,
     pub lines: Vec<CreateBillLineRequest>,
 }
 
@@ -73,6 +102,7 @@ pub struct UpdateBillRequest {
     pub due_date: Option<Date>,
     pub status: Option<BillStatus>,
     pub currency: Option<String>,
+    pub exchange_rate: Option<BigDecimal>,
     pub lines: Option<Vec<CreateBillLineRequest>>,
 }
 
@@ -94,6 +124,7 @@ pub struct BillResponse {
     pub status: String,
     pub total_amount: BigDecimal,
     pub currency: String,
+    pub exchange_rate: BigDecimal,
 }
 
 #[derive(Debug, Serialize)]
@@ -107,6 +138,7 @@ pub struct BillDetailResponse {
     pub status: String,
     pub total_amount: BigDecimal,
     pub currency: String,
+    pub exchange_rate: BigDecimal,
     pub journal_entry_id: Option<JournalEntryId>,
     pub lines: Vec<BillLineResponse>,
 }
@@ -120,6 +152,8 @@ pub struct BillLineResponse {
     pub quantity: BigDecimal,
     pub unit_price: BigDecimal,
     pub amount: BigDecimal,
+    pub foreign_unit_price: BigDecimal,
+    pub foreign_amount: BigDecimal,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,6 +178,7 @@ fn map_bill_row(row: &sqlx::postgres::PgRow) -> Result<BillResponse, sqlx::Error
         status: row.try_get("status")?,
         total_amount: row.try_get("total_amount")?,
         currency: row.try_get("currency")?,
+        exchange_rate: row.try_get("exchange_rate")?,
     })
 }
 
@@ -156,6 +191,8 @@ fn map_bill_line_row(row: &sqlx::postgres::PgRow) -> Result<BillLineResponse, sq
         quantity: row.try_get("quantity")?,
         unit_price: row.try_get("unit_price")?,
         amount: row.try_get("amount")?,
+        foreign_unit_price: row.try_get("foreign_unit_price")?,
+        foreign_amount: row.try_get("foreign_amount")?,
     })
 }
 
@@ -249,7 +286,7 @@ async fn fetch_bill(
     let row = query(
         r#"
         SELECT id, workspace_id, party_id, bill_number, issue_date, due_date,
-               status, total_amount, currency
+               status, total_amount, currency, exchange_rate
         FROM bill
         WHERE id = $1 AND workspace_id = $2
         "#,
@@ -271,7 +308,8 @@ async fn fetch_bill_lines(
 ) -> Result<Vec<BillLineResponse>, ApiError> {
     let rows = query(
         r#"
-        SELECT id, bill_id, description, account_id, quantity, unit_price, amount
+        SELECT id, bill_id, description, account_id, quantity, unit_price, amount,
+               foreign_unit_price, foreign_amount
         FROM bill_line
         WHERE bill_id = $1
         ORDER BY created_at ASC
@@ -319,6 +357,7 @@ async fn fetch_bill_detail(
         status: bill.status,
         total_amount: bill.total_amount,
         currency: bill.currency,
+        exchange_rate: bill.exchange_rate,
         journal_entry_id,
         lines,
     }))
@@ -328,17 +367,23 @@ async fn insert_bill_lines(
     tx: &mut sqlx::PgConnection,
     bill_id: BillId,
     lines: &[CreateBillLineRequest],
+    exchange_rate: &BigDecimal,
 ) -> Result<BigDecimal, ApiError> {
     let mut total = BigDecimal::zero();
 
     for line in lines {
-        let amount = &line.quantity * &line.unit_price;
+        let foreign_amount = &line.quantity * &line.unit_price;
+        let myr_amount = &foreign_amount * exchange_rate;
+        let myr_unit_price = &line.unit_price * exchange_rate;
         let line_id = BillLineId::new();
 
         query(
             r#"
-            INSERT INTO bill_line (id, bill_id, description, account_id, quantity, unit_price, amount)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO bill_line (
+                id, bill_id, description, account_id, quantity, unit_price, amount,
+                foreign_unit_price, foreign_amount
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(line_id.0)
@@ -346,12 +391,14 @@ async fn insert_bill_lines(
         .bind(&line.description)
         .bind(line.account_id.0)
         .bind(&line.quantity)
+        .bind(&myr_unit_price)
+        .bind(&myr_amount)
         .bind(&line.unit_price)
-        .bind(&amount)
+        .bind(&foreign_amount)
         .execute(&mut *tx)
         .await?;
 
-        total = total + &amount;
+        total = total + &myr_amount;
     }
 
     Ok(total)
@@ -368,7 +415,7 @@ pub async fn list_bills(
     let rows = query(
         r#"
         SELECT id, workspace_id, party_id, bill_number, issue_date, due_date,
-               status, total_amount, currency
+               status, total_amount, currency, exchange_rate
         FROM bill
         WHERE workspace_id = $1
           AND ($2::uuid IS NULL OR party_id = $2)
@@ -403,6 +450,8 @@ pub async fn create_bill(
 
     let bill_id = BillId::new();
     let currency = payload.currency.as_deref().unwrap_or("MYR");
+    let exchange_rate = normalize_rate(payload.exchange_rate.as_ref());
+    validate_currency_and_rate(currency, &exchange_rate)?;
 
     let mut tx = state.db.begin().await?;
 
@@ -412,8 +461,8 @@ pub async fn create_bill(
 
     query(
         r#"
-        INSERT INTO bill (id, workspace_id, party_id, bill_number, issue_date, due_date, status, total_amount, currency)
-        VALUES ($1, $2, $3, $4, $5, $6, 'draft', 0, $7)
+        INSERT INTO bill (id, workspace_id, party_id, bill_number, issue_date, due_date, status, total_amount, currency, exchange_rate)
+        VALUES ($1, $2, $3, $4, $5, $6, 'draft', 0, $7, $8)
         "#,
     )
     .bind(bill_id.0)
@@ -423,10 +472,11 @@ pub async fn create_bill(
     .bind(payload.issue_date)
     .bind(payload.due_date)
     .bind(currency)
+    .bind(&exchange_rate)
     .execute(&mut *tx)
     .await?;
 
-    let total = insert_bill_lines(&mut tx, bill_id, &payload.lines).await?;
+    let total = insert_bill_lines(&mut tx, bill_id, &payload.lines, &exchange_rate).await?;
 
     query(
         r#"
@@ -487,6 +537,12 @@ pub async fn update_bill(
     }
 
     let status = payload.status.as_ref().map(|s| s.as_str());
+    let currency = payload.currency.as_deref().unwrap_or(&existing.currency);
+    let exchange_rate = payload
+        .exchange_rate
+        .as_ref()
+        .unwrap_or(&existing.exchange_rate);
+    validate_currency_and_rate(currency, exchange_rate)?;
 
     let mut tx = state.db.begin().await?;
 
@@ -506,6 +562,7 @@ pub async fn update_bill(
             due_date = COALESCE($6, due_date),
             status = COALESCE($7, status),
             currency = COALESCE($8, currency),
+            exchange_rate = COALESCE($9, exchange_rate),
             updated_at = now()
         WHERE id = $1 AND workspace_id = $2
         "#,
@@ -518,15 +575,36 @@ pub async fn update_bill(
     .bind(payload.due_date)
     .bind(status)
     .bind(payload.currency.as_deref())
+    .bind(payload.exchange_rate.as_ref())
     .execute(&mut *tx)
     .await?;
+
+    // Recompute functional (MYR) line amounts when the exchange rate changes and no lines are supplied.
+    if payload.lines.is_none()
+        && payload.exchange_rate.is_some()
+        && payload.exchange_rate.as_ref() != Some(&existing.exchange_rate)
+    {
+        query(
+            r#"
+            UPDATE bill_line
+            SET unit_price = foreign_unit_price * $2,
+                amount = foreign_amount * $2,
+                updated_at = now()
+            WHERE bill_id = $1
+            "#,
+        )
+        .bind(id.0)
+        .bind(exchange_rate)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     let total = if let Some(lines) = payload.lines {
         query("DELETE FROM bill_line WHERE bill_id = $1")
             .bind(id.0)
             .execute(&mut *tx)
             .await?;
-        insert_bill_lines(&mut tx, id, &lines).await?
+        insert_bill_lines(&mut tx, id, &lines, exchange_rate).await?
     } else {
         existing.total_amount
     };
@@ -583,6 +661,12 @@ pub async fn post_bill(
         .map(|line| &line.amount)
         .fold(BigDecimal::zero(), |acc, x| acc + x);
 
+    let foreign_total: BigDecimal = bill
+        .lines
+        .iter()
+        .map(|line| &line.foreign_amount)
+        .fold(BigDecimal::zero(), |acc, x| acc + x);
+
     if total <= BigDecimal::zero() {
         return Err(ApiError::BadRequest(
             "Bill total must be greater than zero".to_string(),
@@ -626,8 +710,11 @@ pub async fn post_bill(
     for line in &bill.lines {
         query(
             r#"
-            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-            VALUES ($1, $2, $3, $4, $5, $6, 0)
+            INSERT INTO journal_line (
+                id, journal_entry_id, account_id, party_id, description,
+                debit, credit, foreign_debit, foreign_credit, exchange_rate, currency
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8, $9)
             "#,
         )
         .bind(JournalLineId::new().0)
@@ -636,14 +723,20 @@ pub async fn post_bill(
         .bind(bill.party_id.0)
         .bind(format!("{} - Bill {}", line.description, bill.bill_number))
         .bind(&line.amount)
+        .bind(&line.foreign_amount)
+        .bind(&bill.exchange_rate)
+        .bind(&bill.currency)
         .execute(&mut *tx)
         .await?;
     }
 
     query(
         r#"
-        INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-        VALUES ($1, $2, $3, $4, $5, 0, $6)
+        INSERT INTO journal_line (
+            id, journal_entry_id, account_id, party_id, description,
+            debit, credit, foreign_debit, foreign_credit, exchange_rate, currency
+        )
+        VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8, $9)
         "#,
     )
     .bind(JournalLineId::new().0)
@@ -652,6 +745,9 @@ pub async fn post_bill(
     .bind(bill.party_id.0)
     .bind(format!("Accounts Payable - Bill {}", bill.bill_number))
     .bind(&total)
+    .bind(&foreign_total)
+    .bind(&bill.exchange_rate)
+    .bind(&bill.currency)
     .execute(&mut *tx)
     .await?;
 
@@ -710,7 +806,8 @@ pub async fn cancel_bill(
 
     let rows = query(
         r#"
-        SELECT account_id, party_id, description, debit, credit
+        SELECT account_id, party_id, description, debit, credit,
+               foreign_debit, foreign_credit, exchange_rate
         FROM journal_line
         WHERE journal_entry_id = $1
         "#,
@@ -750,11 +847,17 @@ pub async fn cancel_bill(
         let description: String = row.try_get("description")?;
         let debit: BigDecimal = row.try_get("debit")?;
         let credit: BigDecimal = row.try_get("credit")?;
+        let foreign_debit: BigDecimal = row.try_get("foreign_debit")?;
+        let foreign_credit: BigDecimal = row.try_get("foreign_credit")?;
+        let exchange_rate: BigDecimal = row.try_get("exchange_rate")?;
 
         query(
             r#"
-            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO journal_line (
+                id, journal_entry_id, account_id, party_id, description,
+                debit, credit, foreign_debit, foreign_credit, exchange_rate
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(JournalLineId::new().0)
@@ -764,6 +867,9 @@ pub async fn cancel_bill(
         .bind(format!("{} - reversal", description))
         .bind(credit)
         .bind(debit)
+        .bind(foreign_credit)
+        .bind(foreign_debit)
+        .bind(exchange_rate)
         .execute(&mut *tx)
         .await?;
     }

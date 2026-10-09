@@ -57,6 +57,7 @@ export function BillsPage() {
   const [issueDate, setIssueDate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [currency, setCurrency] = useState("MYR");
+  const [exchangeRate, setExchangeRate] = useState(1);
   const [lines, setLines] = useState<BillLineForm[]>([emptyLine()]);
 
   const { data: bills, isLoading, error } = useBills(search);
@@ -90,12 +91,13 @@ export function BillsPage() {
         selectedBill.due_date ? selectedBill.due_date.slice(0, 10) : ""
       );
       setCurrency(selectedBill.currency || "MYR");
+      setExchangeRate(selectedBill.exchange_rate ?? 1);
       setLines(
         selectedBill.lines?.map((line) => ({
           description: line.description,
           account_id: line.account_id,
           quantity: String(line.quantity),
-          unit_price: String(line.unit_price),
+          unit_price: String(line.foreign_unit_price ?? line.unit_price),
         })) ?? [emptyLine()]
       );
     }
@@ -107,6 +109,7 @@ export function BillsPage() {
     setIssueDate("");
     setDueDate("");
     setCurrency("MYR");
+    setExchangeRate(1);
     setLines([emptyLine()]);
   };
 
@@ -160,6 +163,7 @@ export function BillsPage() {
     issue_date: issueDate,
     due_date: dueDate || undefined,
     currency,
+    exchange_rate: exchangeRate,
     lines: lines
       .filter((line) => line.description.trim() && line.account_id)
       .map(
@@ -407,10 +411,30 @@ export function BillsPage() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Currency</label>
-                <Input
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                   value={currency}
-                  onChange={(e) => setCurrency(e.target.value)}
-                  placeholder="MYR"
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setCurrency(value);
+                    if (value === "MYR") setExchangeRate(1);
+                  }}
+                >
+                  <option value="MYR">MYR</option>
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                  <option value="SGD">SGD</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Exchange Rate</label>
+                <Input
+                  type="number"
+                  min="0.000001"
+                  step="0.000001"
+                  value={exchangeRate}
+                  onChange={(e) => setExchangeRate(Number(e.target.value))}
+                  disabled={currency === "MYR"}
                 />
               </div>
             </div>

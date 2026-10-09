@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use bigdecimal::{BigDecimal, Zero};
+use bigdecimal::{BigDecimal, One, Zero};
 use power_os_domain::{
     AccountId, BillId, InvoiceId, JournalEntryId, JournalLineId, PartyId, PaymentAllocationId,
     PaymentId, WorkspaceId,
@@ -75,6 +75,34 @@ impl PaymentStatus {
     }
 }
 
+fn supported_currency(currency: &str) -> bool {
+    matches!(currency, "MYR" | "USD" | "EUR" | "SGD")
+}
+
+fn normalize_rate(value: Option<&BigDecimal>) -> BigDecimal {
+    value.cloned().unwrap_or_else(BigDecimal::one)
+}
+
+fn validate_currency_and_rate(currency: &str, rate: &BigDecimal) -> Result<(), ApiError> {
+    if !supported_currency(currency) {
+        return Err(ApiError::BadRequest(format!(
+            "Unsupported currency: {}. Supported: MYR, USD, EUR, SGD",
+            currency
+        )));
+    }
+    if rate <= &BigDecimal::zero() {
+        return Err(ApiError::BadRequest(
+            "Exchange rate must be greater than zero".to_string(),
+        ));
+    }
+    if currency == "MYR" && rate != &BigDecimal::one() {
+        return Err(ApiError::BadRequest(
+            "MYR transactions must use exchange rate 1".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, Validate)]
 pub struct CreatePaymentAllocationRequest {
     pub invoice_id: Option<InvoiceId>,
@@ -89,6 +117,7 @@ pub struct CreatePaymentRequest {
     pub payment_date: Date,
     pub amount: BigDecimal,
     pub currency: Option<String>,
+    pub exchange_rate: Option<BigDecimal>,
     pub payment_method: PaymentMethod,
     pub reference: Option<String>,
     pub notes: Option<String>,
@@ -103,6 +132,7 @@ pub struct UpdatePaymentRequest {
     pub payment_date: Option<Date>,
     pub amount: Option<BigDecimal>,
     pub currency: Option<String>,
+    pub exchange_rate: Option<BigDecimal>,
     pub payment_method: Option<PaymentMethod>,
     pub reference: Option<String>,
     pub notes: Option<String>,
@@ -125,7 +155,9 @@ pub struct PaymentResponse {
     pub bank_account_id: AccountId,
     pub payment_date: Date,
     pub amount: BigDecimal,
+    pub foreign_amount: BigDecimal,
     pub currency: String,
+    pub exchange_rate: BigDecimal,
     pub payment_method: String,
     pub reference: Option<String>,
     pub notes: Option<String>,
@@ -140,6 +172,7 @@ pub struct PaymentAllocationResponse {
     pub invoice_id: Option<InvoiceId>,
     pub bill_id: Option<BillId>,
     pub amount: BigDecimal,
+    pub foreign_amount: BigDecimal,
 }
 
 #[derive(Debug, Serialize)]
@@ -150,7 +183,9 @@ pub struct PaymentDetailResponse {
     pub bank_account_id: AccountId,
     pub payment_date: Date,
     pub amount: BigDecimal,
+    pub foreign_amount: BigDecimal,
     pub currency: String,
+    pub exchange_rate: BigDecimal,
     pub payment_method: String,
     pub reference: Option<String>,
     pub notes: Option<String>,
@@ -168,7 +203,9 @@ fn map_payment_row(row: &sqlx::postgres::PgRow) -> Result<PaymentResponse, sqlx:
         bank_account_id: AccountId(row.try_get("bank_account_id")?),
         payment_date: row.try_get("payment_date")?,
         amount: row.try_get("amount")?,
+        foreign_amount: row.try_get("foreign_amount")?,
         currency: row.try_get("currency")?,
+        exchange_rate: row.try_get("exchange_rate")?,
         payment_method: row.try_get("payment_method")?,
         reference: row.try_get("reference")?,
         notes: row.try_get("notes")?,
@@ -190,6 +227,7 @@ fn map_payment_allocation_row(
             .try_get::<Option<uuid::Uuid>, _>("bill_id")?
             .map(BillId::from),
         amount: row.try_get("amount")?,
+        foreign_amount: row.try_get("foreign_amount")?,
     })
 }
 
@@ -283,7 +321,7 @@ async fn fetch_payment(
     let row = query(
         r#"
         SELECT id, workspace_id, party_id, bank_account_id, payment_date,
-               amount, currency, payment_method, reference, notes,
+               amount, foreign_amount, currency, exchange_rate, payment_method, reference, notes,
                direction, status
         FROM payment
         WHERE id = $1 AND workspace_id = $2
@@ -306,7 +344,7 @@ async fn fetch_payment_allocations(
 ) -> Result<Vec<PaymentAllocationResponse>, ApiError> {
     let rows = query(
         r#"
-        SELECT id, payment_id, invoice_id, bill_id, amount
+        SELECT id, payment_id, invoice_id, bill_id, amount, foreign_amount
         FROM payment_allocation
         WHERE payment_id = $1
         ORDER BY created_at ASC
@@ -351,7 +389,9 @@ async fn fetch_payment_detail(
         bank_account_id: payment.bank_account_id,
         payment_date: payment.payment_date,
         amount: payment.amount,
+        foreign_amount: payment.foreign_amount,
         currency: payment.currency,
+        exchange_rate: payment.exchange_rate,
         payment_method: payment.payment_method,
         reference: payment.reference,
         notes: payment.notes,
@@ -475,30 +515,36 @@ async fn insert_payment_allocations(
     tx: &mut sqlx::PgConnection,
     payment_id: PaymentId,
     allocations: &[CreatePaymentAllocationRequest],
-) -> Result<BigDecimal, ApiError> {
+    exchange_rate: &BigDecimal,
+) -> Result<(BigDecimal, BigDecimal), ApiError> {
     let mut total = BigDecimal::zero();
+    let mut foreign_total = BigDecimal::zero();
 
     for allocation in allocations {
         let allocation_id = PaymentAllocationId::new();
+        let foreign_amount = &allocation.amount;
+        let myr_amount = foreign_amount * exchange_rate;
 
         query(
             r#"
-            INSERT INTO payment_allocation (id, payment_id, invoice_id, bill_id, amount)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO payment_allocation (id, payment_id, invoice_id, bill_id, amount, foreign_amount)
+            VALUES ($1, $2, $3, $4, $5, $6)
             "#,
         )
         .bind(allocation_id.0)
         .bind(payment_id.0)
         .bind(allocation.invoice_id.map(|id| id.0))
         .bind(allocation.bill_id.map(|id| id.0))
-        .bind(&allocation.amount)
+        .bind(&myr_amount)
+        .bind(&foreign_amount)
         .execute(&mut *tx)
         .await?;
 
-        total = total + &allocation.amount;
+        total = total + &myr_amount;
+        foreign_total = foreign_total + foreign_amount;
     }
 
-    Ok(total)
+    Ok((total, foreign_total))
 }
 
 async fn get_allocated_total(
@@ -619,7 +665,7 @@ pub async fn list_payments(
     let rows = query(
         r#"
         SELECT id, workspace_id, party_id, bank_account_id, payment_date,
-               amount, currency, payment_method, reference, notes,
+               amount, foreign_amount, currency, exchange_rate, payment_method, reference, notes,
                direction, status
         FROM payment
         WHERE workspace_id = $1
@@ -672,16 +718,19 @@ pub async fn create_payment(
     .await?;
 
     let currency = payload.currency.as_deref().unwrap_or("MYR");
+    let exchange_rate = normalize_rate(payload.exchange_rate.as_ref());
+    validate_currency_and_rate(currency, &exchange_rate)?;
+    let myr_amount = &payload.amount * &exchange_rate;
     let payment_id = PaymentId::new();
 
     query(
         r#"
         INSERT INTO payment (
             id, workspace_id, party_id, bank_account_id, payment_date,
-            amount, currency, payment_method, reference, notes,
+            amount, foreign_amount, currency, exchange_rate, payment_method, reference, notes,
             direction, status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'draft')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft')
         "#,
     )
     .bind(payment_id.0)
@@ -689,8 +738,10 @@ pub async fn create_payment(
     .bind(payload.party_id.0)
     .bind(payload.bank_account_id.0)
     .bind(payload.payment_date)
+    .bind(&myr_amount)
     .bind(&payload.amount)
     .bind(currency)
+    .bind(&exchange_rate)
     .bind(payload.payment_method.as_str())
     .bind(payload.reference.as_deref())
     .bind(payload.notes.as_deref())
@@ -698,7 +749,7 @@ pub async fn create_payment(
     .execute(&mut *tx)
     .await?;
 
-    insert_payment_allocations(&mut tx, payment_id, &payload.allocations).await?;
+    insert_payment_allocations(&mut tx, payment_id, &payload.allocations, &exchange_rate).await?;
 
     tx.commit().await?;
 
@@ -756,6 +807,19 @@ pub async fn update_payment(
         ensure_party_in_workspace(&state.db, party_id, auth_user.workspace_id).await?;
     }
 
+    let currency = payload.currency.as_deref().unwrap_or(&existing.currency);
+    let exchange_rate = payload
+        .exchange_rate
+        .as_ref()
+        .unwrap_or(&existing.exchange_rate);
+    validate_currency_and_rate(currency, exchange_rate)?;
+
+    let foreign_amount = payload
+        .amount
+        .as_ref()
+        .unwrap_or(&existing.foreign_amount);
+    let myr_amount = foreign_amount * exchange_rate;
+
     let mut tx = state.db.begin().await?;
 
     if let Some(bank_account_id) = payload.bank_account_id {
@@ -779,12 +843,14 @@ pub async fn update_payment(
             party_id = COALESCE($3, party_id),
             bank_account_id = COALESCE($4, bank_account_id),
             payment_date = COALESCE($5, payment_date),
-            amount = COALESCE($6, amount),
-            currency = COALESCE($7, currency),
-            payment_method = COALESCE($8, payment_method),
-            reference = COALESCE($9, reference),
-            notes = COALESCE($10, notes),
-            direction = COALESCE($11, direction),
+            amount = $6,
+            foreign_amount = $7,
+            currency = COALESCE($8, currency),
+            exchange_rate = $9,
+            payment_method = COALESCE($10, payment_method),
+            reference = COALESCE($11, reference),
+            notes = COALESCE($12, notes),
+            direction = COALESCE($13, direction),
             updated_at = now()
         WHERE id = $1 AND workspace_id = $2
         "#,
@@ -794,8 +860,10 @@ pub async fn update_payment(
     .bind(payload.party_id.map(|p| p.0))
     .bind(payload.bank_account_id.map(|a| a.0))
     .bind(payload.payment_date)
-    .bind(payload.amount.as_ref())
+    .bind(&myr_amount)
+    .bind(&foreign_amount)
     .bind(payload.currency.as_deref())
+    .bind(&exchange_rate)
     .bind(payload.payment_method.as_ref().map(|m| m.as_str()))
     .bind(payload.reference.as_deref())
     .bind(payload.notes.as_deref())
@@ -803,12 +871,30 @@ pub async fn update_payment(
     .execute(&mut *tx)
     .await?;
 
+    // Recompute functional (MYR) allocation amounts when the exchange rate changes and no allocations are supplied.
+    if payload.allocations.is_none()
+        && (payload.exchange_rate.is_some() || payload.amount.is_some())
+    {
+        query(
+            r#"
+            UPDATE payment_allocation
+            SET amount = foreign_amount * $2,
+                updated_at = now()
+            WHERE payment_id = $1
+            "#,
+        )
+        .bind(id.0)
+        .bind(exchange_rate)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     if let Some(allocations) = payload.allocations {
         query("DELETE FROM payment_allocation WHERE payment_id = $1")
             .bind(id.0)
             .execute(&mut *tx)
             .await?;
-        insert_payment_allocations(&mut tx, id, &allocations).await?;
+        insert_payment_allocations(&mut tx, id, &allocations, exchange_rate).await?;
     }
 
     tx.commit().await?;
@@ -847,6 +933,12 @@ pub async fn post_payment(
         .allocations
         .iter()
         .map(|a| &a.amount)
+        .fold(BigDecimal::zero(), |acc, x| acc + x);
+
+    let foreign_allocation_total: BigDecimal = payment
+        .allocations
+        .iter()
+        .map(|a| &a.foreign_amount)
         .fold(BigDecimal::zero(), |acc, x| acc + x);
 
     if allocation_total > payment.amount {
@@ -902,6 +994,7 @@ pub async fn post_payment(
         };
 
     let remainder = &payment.amount - &allocation_total;
+    let foreign_remainder = &payment.foreign_amount - &foreign_allocation_total;
 
     let journal_entry_id = JournalEntryId::new();
     query(
@@ -922,8 +1015,11 @@ pub async fn post_payment(
         "received" => {
             query(
                 r#"
-                INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-                VALUES ($1, $2, $3, $4, $5, $6, 0)
+                INSERT INTO journal_line (
+                    id, journal_entry_id, account_id, party_id, description,
+                    debit, credit, foreign_debit, foreign_credit, exchange_rate
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8)
                 "#,
             )
             .bind(JournalLineId::new().0)
@@ -932,13 +1028,18 @@ pub async fn post_payment(
             .bind(payment.party_id.0)
             .bind(format!("Bank - Payment {}", payment.reference.as_deref().unwrap_or("")))
             .bind(&payment.amount)
+            .bind(&payment.foreign_amount)
+            .bind(&payment.exchange_rate)
             .execute(&mut *tx)
             .await?;
 
             query(
                 r#"
-                INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-                VALUES ($1, $2, $3, $4, $5, 0, $6)
+                INSERT INTO journal_line (
+                    id, journal_entry_id, account_id, party_id, description,
+                    debit, credit, foreign_debit, foreign_credit, exchange_rate
+                )
+                VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8)
                 "#,
             )
             .bind(JournalLineId::new().0)
@@ -950,14 +1051,19 @@ pub async fn post_payment(
                 payment.reference.as_deref().unwrap_or("")
             ))
             .bind(&allocation_total)
+            .bind(&foreign_allocation_total)
+            .bind(&payment.exchange_rate)
             .execute(&mut *tx)
             .await?;
 
             if remainder > BigDecimal::zero() {
                 query(
                     r#"
-                    INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-                    VALUES ($1, $2, $3, $4, $5, 0, $6)
+                    INSERT INTO journal_line (
+                        id, journal_entry_id, account_id, party_id, description,
+                        debit, credit, foreign_debit, foreign_credit, exchange_rate
+                    )
+                    VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8)
                     "#,
                 )
                 .bind(JournalLineId::new().0)
@@ -970,6 +1076,8 @@ pub async fn post_payment(
                     payment.reference.as_deref().unwrap_or("")
                 ))
                 .bind(&remainder)
+                .bind(&foreign_remainder)
+                .bind(&payment.exchange_rate)
                 .execute(&mut *tx)
                 .await?;
             }
@@ -977,8 +1085,11 @@ pub async fn post_payment(
         _ => {
             query(
                 r#"
-                INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-                VALUES ($1, $2, $3, $4, $5, $6, 0)
+                INSERT INTO journal_line (
+                    id, journal_entry_id, account_id, party_id, description,
+                    debit, credit, foreign_debit, foreign_credit, exchange_rate
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8)
                 "#,
             )
             .bind(JournalLineId::new().0)
@@ -990,14 +1101,19 @@ pub async fn post_payment(
                 payment.reference.as_deref().unwrap_or("")
             ))
             .bind(&allocation_total)
+            .bind(&foreign_allocation_total)
+            .bind(&payment.exchange_rate)
             .execute(&mut *tx)
             .await?;
 
             if remainder > BigDecimal::zero() {
                 query(
                     r#"
-                    INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-                    VALUES ($1, $2, $3, $4, $5, $6, 0)
+                    INSERT INTO journal_line (
+                        id, journal_entry_id, account_id, party_id, description,
+                        debit, credit, foreign_debit, foreign_credit, exchange_rate
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, 0, $7, 0, $8)
                     "#,
                 )
                 .bind(JournalLineId::new().0)
@@ -1010,14 +1126,19 @@ pub async fn post_payment(
                     payment.reference.as_deref().unwrap_or("")
                 ))
                 .bind(&remainder)
+                .bind(&foreign_remainder)
+                .bind(&payment.exchange_rate)
                 .execute(&mut *tx)
                 .await?;
             }
 
             query(
                 r#"
-                INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-                VALUES ($1, $2, $3, $4, $5, 0, $6)
+                INSERT INTO journal_line (
+                    id, journal_entry_id, account_id, party_id, description,
+                    debit, credit, foreign_debit, foreign_credit, exchange_rate
+                )
+                VALUES ($1, $2, $3, $4, $5, 0, $6, 0, $7, $8)
                 "#,
             )
             .bind(JournalLineId::new().0)
@@ -1026,6 +1147,8 @@ pub async fn post_payment(
             .bind(payment.party_id.0)
             .bind(format!("Bank - Payment {}", payment.reference.as_deref().unwrap_or("")))
             .bind(&payment.amount)
+            .bind(&payment.foreign_amount)
+            .bind(&payment.exchange_rate)
             .execute(&mut *tx)
             .await?;
         }
@@ -1088,7 +1211,8 @@ pub async fn cancel_payment(
 
     let rows = query(
         r#"
-        SELECT account_id, party_id, description, debit, credit
+        SELECT account_id, party_id, description, debit, credit,
+               foreign_debit, foreign_credit, exchange_rate
         FROM journal_line
         WHERE journal_entry_id = $1
         "#,
@@ -1128,11 +1252,17 @@ pub async fn cancel_payment(
         let description: String = row.try_get("description")?;
         let debit: BigDecimal = row.try_get("debit")?;
         let credit: BigDecimal = row.try_get("credit")?;
+        let foreign_debit: BigDecimal = row.try_get("foreign_debit")?;
+        let foreign_credit: BigDecimal = row.try_get("foreign_credit")?;
+        let exchange_rate: BigDecimal = row.try_get("exchange_rate")?;
 
         query(
             r#"
-            INSERT INTO journal_line (id, journal_entry_id, account_id, party_id, description, debit, credit)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO journal_line (
+                id, journal_entry_id, account_id, party_id, description,
+                debit, credit, foreign_debit, foreign_credit, exchange_rate
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(JournalLineId::new().0)
@@ -1142,6 +1272,9 @@ pub async fn cancel_payment(
         .bind(format!("{} - reversal", description))
         .bind(credit)
         .bind(debit)
+        .bind(foreign_credit)
+        .bind(foreign_debit)
+        .bind(exchange_rate)
         .execute(&mut *tx)
         .await?;
     }
