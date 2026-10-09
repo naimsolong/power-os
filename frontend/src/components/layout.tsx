@@ -10,6 +10,9 @@ import {
   Settings,
   LogOut,
   User,
+  BookOpen,
+  Receipt,
+  CalendarRange,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
@@ -22,7 +25,10 @@ const navItems = [
   { to: "/deals", label: "Deals", icon: Handshake },
   { to: "/invoices", label: "Invoices", icon: FileText },
   { to: "/employees", label: "Employees", icon: Briefcase },
+  { to: "/chart-of-accounts", label: "Chart of Accounts", icon: BookOpen },
   { to: "/ai-assistant", label: "AI Assistant", icon: Sparkles },
+  { to: "/tax-codes", label: "Tax Codes", icon: Receipt },
+  { to: "/fiscal-periods", label: "Periods", icon: CalendarRange },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

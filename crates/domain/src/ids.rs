@@ -46,3 +46,6 @@ define_id!(DealId);
 define_id!(DealStageId);
 define_id!(EmployeeId);
 define_id!(ActivityId);
+define_id!(TaxCodeId);
+define_id!(FiscalYearId);
+define_id!(AccountingPeriodId);

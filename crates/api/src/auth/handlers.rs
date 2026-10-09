@@ -145,6 +145,10 @@ pub async fn register(
 
     tx.commit().await.map_err(|_| AuthHandlerError::Internal)?;
 
+    crate::routes::fiscal_periods::seed_fiscal_year(&state.db, workspace_id, user_id)
+        .await
+        .map_err(|_| AuthHandlerError::Internal)?;
+
     session
         .insert(USER_ID_KEY, user_id)
         .await

@@ -9,14 +9,17 @@ use crate::auth;
 use crate::lhdn;
 use crate::state::AppState;
 
+pub(crate) mod accounts;
 mod deal_stages;
 mod deals;
 pub(crate) mod employees;
 pub(crate) mod error;
+pub(crate) mod fiscal_periods;
 mod health;
 pub(crate) mod invoices;
 mod journal_entries;
 mod parties;
+pub(crate) mod tax_codes;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -25,9 +28,13 @@ pub fn router(state: AppState) -> Router {
         .nest("/api/parties", parties::router())
         .nest("/api/deal-stages", deal_stages::router())
         .nest("/api/deals", deals::router())
+        .nest("/api/accounts", accounts::router())
         .nest("/api/employees", employees::router())
         .nest("/api/invoices", invoices::router())
         .nest("/api/journal-entries", journal_entries::router())
+        .nest("/api/tax-codes", tax_codes::router())
+        .nest("/api/fiscal-years", fiscal_periods::router())
+        .nest("/api/accounting-periods", fiscal_periods::accounting_periods_router())
         .route("/api/ai/chat", post(ai::handlers::chat))
         .route(
             "/api/workspace/lhdn-settings",

@@ -18,9 +18,12 @@ import { CompaniesPage } from "@/pages/companies";
 import { DealsPage } from "@/pages/deals";
 import { InvoicesPage } from "@/pages/invoices";
 import { AiAssistantPage } from "@/pages/ai-assistant";
+import { ChartOfAccountsPage } from "@/pages/chart-of-accounts";
 import { EmployeesPage } from "@/pages/employees";
+import { FiscalPeriodsPage } from "@/pages/fiscal-periods";
 import { LandingPage } from "@/pages/landing";
 import { SettingsPage } from "@/pages/settings";
+import { TaxCodesPage } from "@/pages/tax-codes";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -75,7 +78,10 @@ const router = createBrowserRouter([
               { path: "deals", element: <DealsPage /> },
               { path: "invoices", element: <InvoicesPage /> },
               { path: "employees", element: <EmployeesPage /> },
+              { path: "chart-of-accounts", element: <ChartOfAccountsPage /> },
               { path: "ai-assistant", element: <AiAssistantPage /> },
+              { path: "tax-codes", element: <TaxCodesPage /> },
+              { path: "fiscal-periods", element: <FiscalPeriodsPage /> },
               { path: "settings", element: <SettingsPage /> },
               { index: true, element: <Navigate to="/dashboard" replace /> },
               { path: "*", element: <Navigate to="/dashboard" replace /> },
