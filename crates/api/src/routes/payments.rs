@@ -18,6 +18,7 @@ use time::Date;
 use validator::Validate;
 
 use crate::auth::AuthUser;
+use crate::routes::common::ensure_period_open;
 use crate::routes::error::ApiError;
 use crate::state::AppState;
 
@@ -947,6 +948,8 @@ pub async fn post_payment(
         ));
     }
 
+    ensure_period_open(&state.db, auth_user.workspace_id, payment.payment_date).await?;
+
     let mut tx = state.db.begin().await?;
 
     ensure_account_in_workspace(&mut tx, payment.bank_account_id, auth_user.workspace_id).await?;
@@ -1207,6 +1210,8 @@ pub async fn cancel_payment(
         None => return Err(ApiError::BadRequest("Payment has no journal entry".to_string())),
     };
 
+    ensure_period_open(&state.db, auth_user.workspace_id, payment.payment_date).await?;
+
     let mut tx = state.db.begin().await?;
 
     let rows = query(
@@ -1228,7 +1233,6 @@ pub async fn cancel_payment(
     }
 
     let reversal_entry_id = JournalEntryId::new();
-    let today = time::OffsetDateTime::now_utc().date();
 
     query(
         r#"
@@ -1238,7 +1242,7 @@ pub async fn cancel_payment(
     )
     .bind(reversal_entry_id.0)
     .bind(auth_user.workspace_id.0)
-    .bind(today)
+    .bind(payment.payment_date)
     .bind(format!("CNCL-{}", payment.reference.as_deref().unwrap_or("")))
     .bind(format!("Cancellation of payment {}", payment.reference.as_deref().unwrap_or("")))
     .execute(&mut *tx)

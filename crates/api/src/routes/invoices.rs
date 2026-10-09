@@ -19,6 +19,7 @@ use validator::Validate;
 
 use crate::auth::AuthUser;
 use crate::lhdn;
+use crate::routes::common::ensure_period_open;
 use crate::routes::error::ApiError;
 use crate::state::AppState;
 
@@ -849,6 +850,8 @@ pub async fn post_invoice(
             "Invoice total must be greater than zero".to_string(),
         ));
     }
+
+    ensure_period_open(&state.db, auth_user.workspace_id, invoice.issue_date).await?;
 
     let mut tx = state.db.begin().await?;
 

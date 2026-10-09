@@ -17,6 +17,7 @@ use time::Date;
 use validator::Validate;
 
 use crate::auth::AuthUser;
+use crate::routes::common::ensure_period_open;
 use crate::routes::error::ApiError;
 use crate::state::AppState;
 
@@ -693,6 +694,8 @@ pub async fn post_expense(
         ));
     }
 
+    ensure_period_open(&state.db, auth_user.workspace_id, expense.expense_date).await?;
+
     let mut tx = state.db.begin().await?;
 
     let credit_account_id = match expense.paid_from_account_id {
@@ -833,6 +836,8 @@ pub async fn cancel_expense(
         )),
     };
 
+    ensure_period_open(&state.db, auth_user.workspace_id, expense.expense_date).await?;
+
     let mut tx = state.db.begin().await?;
 
     let rows = query(
@@ -854,7 +859,6 @@ pub async fn cancel_expense(
     }
 
     let reversal_entry_id = JournalEntryId::new();
-    let today = time::OffsetDateTime::now_utc().date();
     let reference = expense
         .reference
         .as_deref()
@@ -868,7 +872,7 @@ pub async fn cancel_expense(
     )
     .bind(reversal_entry_id.0)
     .bind(auth_user.workspace_id.0)
-    .bind(today)
+    .bind(expense.expense_date)
     .bind(format!("CNCL-{}", reference))
     .bind(format!("Cancellation of expense {}", reference))
     .execute(&mut *tx)

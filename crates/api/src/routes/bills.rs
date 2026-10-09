@@ -17,6 +17,7 @@ use time::Date;
 use validator::Validate;
 
 use crate::auth::AuthUser;
+use crate::routes::common::ensure_period_open;
 use crate::routes::error::ApiError;
 use crate::state::AppState;
 
@@ -673,6 +674,8 @@ pub async fn post_bill(
         ));
     }
 
+    ensure_period_open(&state.db, auth_user.workspace_id, bill.issue_date).await?;
+
     let mut tx = state.db.begin().await?;
 
     let payable_account_id = match payload.payable_account_id {
@@ -802,6 +805,8 @@ pub async fn cancel_bill(
         None => return Err(ApiError::BadRequest("Bill has no journal entry".to_string())),
     };
 
+    ensure_period_open(&state.db, auth_user.workspace_id, bill.issue_date).await?;
+
     let mut tx = state.db.begin().await?;
 
     let rows = query(
@@ -823,7 +828,6 @@ pub async fn cancel_bill(
     }
 
     let reversal_entry_id = JournalEntryId::new();
-    let today = time::OffsetDateTime::now_utc().date();
 
     query(
         r#"
@@ -833,7 +837,7 @@ pub async fn cancel_bill(
     )
     .bind(reversal_entry_id.0)
     .bind(auth_user.workspace_id.0)
-    .bind(today)
+    .bind(bill.issue_date)
     .bind(format!("CNCL-{}", bill.bill_number))
     .bind(format!("Cancellation of bill {}", bill.bill_number))
     .execute(&mut *tx)

@@ -15,6 +15,7 @@ use time::Date;
 use validator::Validate;
 
 use crate::auth::AuthUser;
+use crate::routes::common::ensure_period_open;
 use crate::routes::error::ApiError;
 use crate::state::AppState;
 
@@ -650,6 +651,8 @@ pub async fn post_journal_entry(
 
     validate_myr_balance(&existing.lines)?;
 
+    ensure_period_open(&state.db, auth_user.workspace_id, existing.entry_date).await?;
+
     query(
         r#"
         UPDATE journal_entry
@@ -685,6 +688,8 @@ pub async fn cancel_journal_entry(
             "Only posted journal entries can be cancelled".to_string(),
         ));
     }
+
+    ensure_period_open(&state.db, auth_user.workspace_id, original.entry_date).await?;
 
     let reversing_entry_id = JournalEntryId::new();
     let reference = original

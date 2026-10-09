@@ -11,6 +11,7 @@ use crate::state::AppState;
 
 pub(crate) mod accounts;
 pub(crate) mod bills;
+pub(crate) mod common;
 mod deal_stages;
 mod deals;
 pub(crate) mod employees;
